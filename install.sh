@@ -605,21 +605,30 @@ main() {
         do_mcp_register
     fi
 
-    echo ""
-    if [ "$MCP_ONLY" -eq 1 ]; then
-        echo "ffs MCP registration complete."
-    else
-        echo "ffs installed to $DEST/$BINARY_NAME"
-        "$DEST/$BINARY_NAME" --version 2>/dev/null || true
+    # The summary footer is opt-out via --quiet; the conditional `echo` for the
+    # MCP line must NOT be the final statement of the function — with `set -e`
+    # a falsy short-circuit would propagate as a non-zero exit code even after
+    # a successful install.
+    if [ "$QUIET" -eq 0 ]; then
+        echo ""
+        if [ "$MCP_ONLY" -eq 1 ]; then
+            echo "ffs MCP registration complete."
+        else
+            echo "ffs installed to $DEST/$BINARY_NAME"
+            "$DEST/$BINARY_NAME" --version 2>/dev/null || true
+        fi
+        echo ""
+        echo "Quick start:"
+        echo "  ffs --help"
+        echo "  ffs index           # one-time warm-up"
+        echo "  ffs find <query>"
+        echo "  ffs grep <pattern>"
+        echo "  ffs symbol <name>"
+        if [ "$MCP" -eq 1 ]; then
+            echo "  ffs mcp             # MCP server (registered with detected agents)"
+        fi
     fi
-    echo ""
-    echo "Quick start:"
-    echo "  ffs --help"
-    echo "  ffs index           # one-time warm-up"
-    echo "  ffs find <query>"
-    echo "  ffs grep <pattern>"
-    echo "  ffs symbol <name>"
-    [ "$MCP" -eq 1 ] && echo "  ffs mcp             # MCP server (registered with detected agents)"
+    return 0
 }
 
 # curl|bash safety: buffer the whole script before running so a truncated
