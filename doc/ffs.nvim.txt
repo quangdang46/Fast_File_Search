@@ -29,17 +29,23 @@ INSTALL                                                     *ffs.nvim-install*
     curl -fsSL "https://raw.githubusercontent.com/quangdang46/fast_file_search/main/install.sh?$(date +%s)" | bash
 <
 
-That’s it. The script detects your platform, fetches the matching binary from
-GitHub Releases
-<https://github.com/quangdang46/fast_file_search/releases/latest>, verifies the
-SHA-256 sidecar, and atomically installs to `~/.local/bin/ffs`.
+**Windows (PowerShell):**
+
+>powershell
+    irm https://raw.githubusercontent.com/quangdang46/fast_file_search/main/install.ps1 | iex
+<
+
+The scripts detect your platform, fetch the matching binary from GitHub
+Releases <https://github.com/quangdang46/fast_file_search/releases/latest>,
+verify the SHA-256 sidecar, and atomically install to `~/.local/bin/ffs` (Unix)
+or `%LOCALAPPDATA%\ffs\bin` (Windows).
 
 
 SUPPORTED PLATFORMS ~
 
 - Linux x86_64 / aarch64 (musl-linked, portable across glibc versions)
 - macOS x86_64 / aarch64
-- Windows x86_64 / aarch64 (run install.sh from Git Bash or WSL)
+- Windows x86_64 / aarch64
 
 ------------------------------------------------------------------------------
 
