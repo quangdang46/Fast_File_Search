@@ -90,11 +90,38 @@ jobs:
 
       - name: Run Lua tests
         shell: bash
-        run: make test-lua
+        run: |
+          # PlenaryBustedDirectory may exit non-zero on Windows even when all
+          # tests pass (nvim --headless exit-code quirk). Parse test output to
+          # detect real failures instead of relying on the exit code alone.
+          set +e
+          output=$(make test-lua 2>&1)
+          rc=$?
+          echo "$output"
+          if echo "$output" | grep -qE 'Failed\s*:\s*[1-9]'; then
+            echo "::error::Lua tests had failures"
+            exit 1
+          fi
+          if ! echo "$output" | grep -q 'Success'; then
+            echo "::error::No test results found — build or runner may have failed"
+            exit $rc
+          fi
 
       - name: Run version resolution tests
         shell: bash
-        run: make test-version
+        run: |
+          set +e
+          output=$(make test-version 2>&1)
+          rc=$?
+          echo "$output"
+          if echo "$output" | grep -qE 'Failed\s*:\s*[1-9]'; then
+            echo "::error::Version tests had failures"
+            exit 1
+          fi
+          if ! echo "$output" | grep -q 'Success'; then
+            echo "::error::No test results found — build or runner may have failed"
+            exit $rc
+          fi
 
       - name: Run bun tests
         shell: bash

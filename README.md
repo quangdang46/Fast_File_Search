@@ -15,15 +15,22 @@ and a token-budget aware file reader for AI agents.
 curl -fsSL "https://raw.githubusercontent.com/quangdang46/fast_file_search/main/install.sh?$(date +%s)" | bash
 ```
 
-That's it. The script detects your platform, fetches the matching
-binary from [GitHub Releases](https://github.com/quangdang46/fast_file_search/releases/latest),
-verifies the SHA-256 sidecar, and atomically installs to `~/.local/bin/ffs`.
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/quangdang46/fast_file_search/main/install.ps1 | iex
+```
+
+The scripts detect your platform, fetch the matching binary from
+[GitHub Releases](https://github.com/quangdang46/fast_file_search/releases/latest),
+verify the SHA-256 sidecar, and atomically install to `~/.local/bin/ffs`
+(Unix) or `%LOCALAPPDATA%\ffs\bin` (Windows).
 
 ### Supported platforms
 
 - Linux x86_64 / aarch64 (musl-linked, portable across glibc versions)
 - macOS x86_64 / aarch64
-- Windows x86_64 / aarch64 (run install.sh from Git Bash or WSL)
+- Windows x86_64 / aarch64
 
 ---
 
@@ -290,6 +297,94 @@ no `.gitignore` re-read, no cold scan, no subprocess spawn.
 │ └─────────────┘ │
 └─────────────────┘
 ```
+
+---
+
+## Performance & Benchmarks
+
+All numbers below are **single-threaded medians** measured with
+[Criterion.rs](https://github.com/bheisler/criterion.rs) on a Linux x86-64
+machine. Benchmarks run weekly in CI (`bench-track.yml`); the raw Criterion
+HTML reports are published as GitHub Actions artifacts.
+
+### Engine dispatch (ffs-engine)
+
+End-to-end latency from raw query string to ranked results over a 256-file
+fixture repo (32 dirs × 8 files).
+
+| Query type | Example | Median |
+|---|---|---|
+| Symbol lookup | `worker_05_3` | **202 ns** |
+| Concept / NL | `how does the worker handle payloads` | **205 ns** |
+| File path | `mod_03/file_2.rs` | **2.2 µs** |
+| Glob | `**/*.rs` | **2.8 µs** |
+
+Query classification alone: 107–1,640 ns depending on pattern complexity.
+Scoring a single result (`score_one`): **~3 ns**.
+
+### Bigram index (ffs-core)
+
+Query latency across different index sizes:
+
+| Index size | 2-char query | 6-char query | 14-char query |
+|---|---|---|---|
+| 10 K files | 46 ns | 120 ns | 314 ns |
+| 100 K files | 368 ns | 410 ns | 443 ns |
+| 500 K files | 761 ns | 1.6 µs | 1.6 µs |
+
+Index build (100 K files): **86 ms** (short content) / **2.5 s** (4 KB/file).
+
+### Case-insensitive memmem (ffs-core, AVX2 packed-pair)
+
+Searching real source files from this repo:
+
+| Haystack | Needle | packed_pair | memchr2 baseline | Speedup |
+|---|---|---|---|---|
+| grep.rs (80 KB) | `"fn"` (hit) | 44 ns | 204 ns | **4.6×** |
+| grep.rs (80 KB) | `"search_file"` (hit) | 1.6 µs | 13.6 µs | **8.6×** |
+| combined (1 MB) | `"content_cache_budget"` (hit) | 37 µs | 400 µs | **10.8×** |
+
+### Query parser (ffs-query-parser)
+
+| Query | Median |
+|---|---|
+| `*.rs` (extension) | 60 ns |
+| `struct` (simple text) | 234 ns |
+| `src name *.rs !test /lib/ status:modified` (complex) | 523 ns |
+| 26-token worst case | 3.7 µs |
+
+### Symbol index (ffs-symbol)
+
+| Operation | Median |
+|---|---|
+| Index one Rust file (50 lines) | 219 µs |
+| Exact symbol lookup (1 K files indexed) | 95 µs |
+| Prefix lookup (`"Wor"`) | 115 µs |
+| Bloom insert (8 K identifiers) | 35 µs |
+
+### Token budget (ffs-budget)
+
+| Operation | Size | Median |
+|---|---|---|
+| Smart truncate | 128 lines | 5.6 µs |
+| Smart truncate | 8 192 lines | 374 µs |
+| Comment filter (none) | 64 KB | 1.4 µs |
+| Comment filter (aggressive) | 64 KB | 329 µs |
+| Comment filter (aggressive) | 512 KB | 2.4 ms |
+
+<details>
+<summary>Reproduce locally</summary>
+
+```bash
+# requires Zig for zlob feature
+cargo bench --features zlob \
+  -p ffs-search -p ffs-query-parser \
+  -p ffs-symbol -p ffs-budget -p ffs-engine
+
+# HTML reports land in target/criterion/
+```
+
+</details>
 
 ---
 

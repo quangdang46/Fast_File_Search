@@ -127,7 +127,7 @@ jobs:
           components: clippy
           
       - name: Run clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --workspace --features zlob -- -D warnings
 
   bench-smoke:
     name: bench-smoke (cargo bench --no-run)
@@ -150,7 +150,9 @@ jobs:
 
       - name: Compile benches (no run)
         run: |
-          cargo bench --no-run \
+          cargo bench --no-run --features zlob \
+            -p ffs-search \
+            -p ffs-query-parser \
             -p ffs-symbol \
             -p ffs-budget \
             -p ffs-engine

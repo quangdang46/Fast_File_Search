@@ -36,7 +36,9 @@ jobs:
 
       - name: Run benches
         run: |
-          cargo bench \
+          cargo bench --features zlob \
+            -p ffs-search \
+            -p ffs-query-parser \
             -p ffs-symbol \
             -p ffs-budget \
             -p ffs-engine

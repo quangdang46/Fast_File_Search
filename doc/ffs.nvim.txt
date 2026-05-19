@@ -1,5 +1,5 @@
 *ffs.nvim.txt*
-                              For Neovim >= 0.10.0    Last change: 2026 May 17
+                              For Neovim >= 0.10.0    Last change: 2026 May 19
 
 ==============================================================================
 Table of Contents                                 *ffs.nvim-table-of-contents*
@@ -10,6 +10,7 @@ Table of Contents                                 *ffs.nvim-table-of-contents*
   - MCP server                                           |ffs.nvim-mcp-server|
   - Why ffs                                                 |ffs.nvim-why-ffs|
   - Architecture                                       |ffs.nvim-architecture|
+  - Performance & Benchmarks               |ffs.nvim-performance-&-benchmarks|
   - Other surfaces                                   |ffs.nvim-other-surfaces|
   - Build from source                             |ffs.nvim-build-from-source|
   - Repository layout                             |ffs.nvim-repository-layout|
@@ -28,17 +29,23 @@ INSTALL                                                     *ffs.nvim-install*
     curl -fsSL "https://raw.githubusercontent.com/quangdang46/fast_file_search/main/install.sh?$(date +%s)" | bash
 <
 
-That’s it. The script detects your platform, fetches the matching binary from
-GitHub Releases
-<https://github.com/quangdang46/fast_file_search/releases/latest>, verifies the
-SHA-256 sidecar, and atomically installs to `~/.local/bin/ffs`.
+**Windows (PowerShell):**
+
+>powershell
+    irm https://raw.githubusercontent.com/quangdang46/fast_file_search/main/install.ps1 | iex
+<
+
+The scripts detect your platform, fetch the matching binary from GitHub
+Releases <https://github.com/quangdang46/fast_file_search/releases/latest>,
+verify the SHA-256 sidecar, and atomically install to `~/.local/bin/ffs` (Unix)
+or `%LOCALAPPDATA%\ffs\bin` (Windows).
 
 
 SUPPORTED PLATFORMS ~
 
 - Linux x86_64 / aarch64 (musl-linked, portable across glibc versions)
 - macOS x86_64 / aarch64
-- Windows x86_64 / aarch64 (run install.sh from Git Bash or WSL)
+- Windows x86_64 / aarch64
 
 ------------------------------------------------------------------------------
 
@@ -357,6 +364,99 @@ re-read, no cold scan, no subprocess spawn.
     │ │ frecency DB │ │
     │ └─────────────┘ │
     └─────────────────┘
+<
+
+------------------------------------------------------------------------------
+
+PERFORMANCE & BENCHMARKS                   *ffs.nvim-performance-&-benchmarks*
+
+All numbers below are **single-threaded medians** measured with Criterion.rs
+<https://github.com/bheisler/criterion.rs> on a Linux x86-64 machine.
+Benchmarks run weekly in CI (`bench-track.yml`); the raw Criterion HTML reports
+are published as GitHub Actions artifacts.
+
+
+ENGINE DISPATCH (FFS-ENGINE) ~
+
+End-to-end latency from raw query string to ranked results over a 256-file
+fixture repo (32 dirs × 8 files).
+
+  Query type      Example                               Median
+  --------------- ------------------------------------- --------
+  Symbol lookup   worker_05_3                           202 ns
+  Concept / NL    how does the worker handle payloads   205 ns
+  File path       mod_03/file_2.rs                      2.2 µs
+  Glob            **/*.rs                               2.8 µs
+Query classification alone: 107–1,640 ns depending on pattern complexity.
+Scoring a single result (`score_one`): **~3 ns**.
+
+
+BIGRAM INDEX (FFS-CORE) ~
+
+Query latency across different index sizes:
+
+  Index size    2-char query   6-char query   14-char query
+  ------------- -------------- -------------- ---------------
+  10 K files    46 ns          120 ns         314 ns
+  100 K files   368 ns         410 ns         443 ns
+  500 K files   761 ns         1.6 µs         1.6 µs
+Index build (100 K files): **86 ms** (short content) / **2.5 s** (4 KB/file).
+
+
+CASE-INSENSITIVE MEMMEM (FFS-CORE, AVX2 PACKED-PAIR) ~
+
+Searching real source files from this repo:
+
+  ------------------------------------------------------------------------------------
+  Haystack       Needle                   packed_pair    memchr2        Speedup
+                                                         baseline       
+  -------------- ------------------------ -------------- -------------- --------------
+  grep.rs (80    "fn" (hit)               44 ns          204 ns         4.6×
+  KB)                                                                   
+
+  grep.rs (80    "search_file" (hit)      1.6 µs         13.6 µs        8.6×
+  KB)                                                                   
+
+  combined (1    "content_cache_budget"   37 µs          400 µs         10.8×
+  MB)            (hit)                                                  
+  ------------------------------------------------------------------------------------
+
+QUERY PARSER (FFS-QUERY-PARSER) ~
+
+  Query                                                 Median
+  ----------------------------------------------------- --------
+  *.rs (extension)                                      60 ns
+  struct (simple text)                                  234 ns
+  src name *.rs !test /lib/ status:modified (complex)   523 ns
+  26-token worst case                                   3.7 µs
+
+SYMBOL INDEX (FFS-SYMBOL) ~
+
+  Operation                                 Median
+  ----------------------------------------- --------
+  Index one Rust file (50 lines)            219 µs
+  Exact symbol lookup (1 K files indexed)   95 µs
+  Prefix lookup ("Wor")                     115 µs
+  Bloom insert (8 K identifiers)            35 µs
+
+TOKEN BUDGET (FFS-BUDGET) ~
+
+  Operation                     Size          Median
+  ----------------------------- ------------- --------
+  Smart truncate                128 lines     5.6 µs
+  Smart truncate                8 192 lines   374 µs
+  Comment filter (none)         64 KB         1.4 µs
+  Comment filter (aggressive)   64 KB         329 µs
+  Comment filter (aggressive)   512 KB        2.4 ms
+Reproduce locally ~
+
+>bash
+    # requires Zig for zlob feature
+    cargo bench --features zlob \
+      -p ffs-search -p ffs-query-parser \
+      -p ffs-symbol -p ffs-budget -p ffs-engine
+    
+    # HTML reports land in target/criterion/
 <
 
 ------------------------------------------------------------------------------
