@@ -1,5 +1,5 @@
 *ffs.nvim.txt*
-                              For Neovim >= 0.10.0    Last change: 2026 May 19
+                              For Neovim >= 0.10.0    Last change: 2026 May 20
 
 ==============================================================================
 Table of Contents                                 *ffs.nvim-table-of-contents*
