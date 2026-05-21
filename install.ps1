@@ -82,6 +82,19 @@ function Write-Info    { param($m) Write-Host "[$BinaryName] $m" }
 function Write-Success { param($m) Write-Host "[OK] $m" -ForegroundColor Green }
 function Write-Warn    { param($m) Write-Host "[$BinaryName] WARN: $m" -ForegroundColor Yellow }
 
+# Run a native command, swallow all output, and prevent PowerShell 5.1's
+# `NativeCommandError` from terminating the script under `Stop`. Returns
+# `$LASTEXITCODE`. `2>$null` alone is not enough: PS 5.1 still surfaces a
+# `RemoteException` (red text) and, with `$ErrorActionPreference = 'Stop'`,
+# aborts the script the first time a native exe writes to stderr.
+function Invoke-Quiet {
+    param([Parameter(Mandatory)][scriptblock]$Block)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try { & $Block 2>&1 | Out-Null } finally { $ErrorActionPreference = $prev }
+    return $LASTEXITCODE
+}
+
 # === Platform detection ===
 function Get-Target {
     $arch = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment').PROCESSOR_ARCHITECTURE
@@ -260,12 +273,12 @@ function Register-McpClaude {
         Write-Info "[mcp dry-run] claude mcp add -s user $McpName -- $cmd mcp"
         return
     }
-    & claude mcp remove -s user $McpName 2>$null
-    try {
-        & claude mcp add -s user $McpName -- $cmd mcp 2>$null
+    [void](Invoke-Quiet { & claude mcp remove -s user $McpName })
+    $rc = Invoke-Quiet { & claude mcp add -s user $McpName -- $cmd mcp }
+    if ($rc -eq 0) {
         Write-Success "[mcp] registered with Claude Code"
-    } catch {
-        Write-Warn "claude mcp add failed"
+    } else {
+        Write-Warn "claude mcp add failed (exit $rc)"
     }
 }
 
@@ -277,12 +290,12 @@ function Register-McpCodex {
         Write-Info "[mcp dry-run] codex mcp add $McpName -- $cmd mcp"
         return
     }
-    & codex mcp remove $McpName 2>$null
-    try {
-        & codex mcp add $McpName -- $cmd mcp 2>$null
+    [void](Invoke-Quiet { & codex mcp remove $McpName })
+    $rc = Invoke-Quiet { & codex mcp add $McpName -- $cmd mcp }
+    if ($rc -eq 0) {
         Write-Success "[mcp] registered with Codex"
-    } catch {
-        Write-Warn "codex mcp add failed"
+    } else {
+        Write-Warn "codex mcp add failed (exit $rc)"
     }
 }
 
@@ -372,12 +385,12 @@ function Invoke-McpUninstall {
     Write-Info "Removing '$McpName' from MCP providers..."
     # Claude
     if (Get-Command claude -ErrorAction SilentlyContinue) {
-        & claude mcp remove -s user $McpName 2>$null
+        [void](Invoke-Quiet { & claude mcp remove -s user $McpName })
         Write-Success "[mcp] removed $McpName from Claude Code"
     }
     # Codex
     if (Get-Command codex -ErrorAction SilentlyContinue) {
-        & codex mcp remove $McpName 2>$null
+        [void](Invoke-Quiet { & codex mcp remove $McpName })
         Write-Success "[mcp] removed $McpName from Codex"
     }
     # Cursor
