@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     ffs installer for Windows — downloads the right binary from GitHub Releases
@@ -171,12 +171,14 @@ function Add-ToUserPath {
     param([string]$Dir)
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     if (-not $userPath) { $userPath = '' }
-    $entries = $userPath -split ';' | Where-Object { $_ -ne '' }
-    if ($entries -notcontains $Dir -and $entries -notcontains $Dir.TrimEnd('\')) {
-        $newPath = (@($entries + $Dir) -join ';')
-        [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-        Write-Success "Added $Dir to user PATH."
-    }
+    $entries = $userPath -split ';' | Where-Object { $_ -ne '' -and $_ -ne $Dir -and $_ -ne $Dir.TrimEnd('\') }
+    # Prepend rather than append so the freshly installed binary always wins
+    # PATH resolution. Appending leaves us shadowed by any stale `ffs.exe` (or
+    # zero-byte WindowsApps stub) earlier on PATH, which is the classic cause
+    # of "not a valid application for this OS platform" right after install.
+    $newPath = (@(@($Dir) + $entries) -join ';')
+    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+    Write-Success "Added $Dir to user PATH (prepended)."
 }
 
 function Add-ToProfilePath {
@@ -200,7 +202,10 @@ function Set-PathPersistence {
         'Profile' { Add-ToProfilePath $Dir }
         'None'    { Write-Info "Skipping PATH persistence (-PathScope None)." }
     }
-    if (-not (Test-OnPath $Dir)) { $env:PATH = "$env:PATH;$Dir" }
+    # Mirror the prepend in the *current* session so the rest of this script
+    # (and the user's next command, if they don't open a new shell) resolves
+    # `ffs` to the binary we just wrote.
+    if (-not (Test-OnPath $Dir)) { $env:PATH = "$Dir;$env:PATH" }
 }
 
 # === Uninstall ===
@@ -454,22 +459,82 @@ function Main {
                 Write-Warn "No sha256 sidecar or verification failed - skipping checksum"
             }
 
-            # Install
+            # Install. Atomic-ish: stage as `<dest>.tmp.<pid>` *inside* the
+            # destination directory (same volume, so Move-Item is a rename,
+            # never a copy-and-delete that an AV scanner could intercept
+            # mid-write), then atomically rename onto the final path.
             New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
             $dest = Join-Path $InstallDir "$BinaryName.exe"
-            Move-Item -Force -Path $tmpFile -Destination $dest
+            $stage = "$dest.tmp.$PID"
+            if (Test-Path $stage) { Remove-Item -Force $stage }
+            Copy-Item -LiteralPath $tmpFile -Destination $stage -Force
+            try {
+                Move-Item -LiteralPath $stage -Destination $dest -Force
+            } catch {
+                Remove-Item -LiteralPath $stage -Force -ErrorAction SilentlyContinue
+                throw
+            }
+            # Strip the Zone.Identifier ADS so SmartScreen / WDAC doesn't
+            # block downstream invocations with a generic "not a valid
+            # application for this OS platform" error.
+            try { Unblock-File -LiteralPath $dest -ErrorAction SilentlyContinue } catch {}
             Write-Success "Installed $dest"
+
+            # Fail loudly if Defender / an EDR has already replaced the
+            # file with a quarantine stub. The published Windows asset is
+            # ~35 MB; anything dramatically smaller is almost certainly a
+            # stub or a truncated download.
+            $installed = Get-Item -LiteralPath $dest
+            if ($installed.Length -lt 1MB) {
+                throw "Installed $dest is only $($installed.Length) bytes - this is almost certainly an antivirus quarantine stub. Check Get-MpThreatDetection or your EDR console, then add an exclusion for $InstallDir and re-run the installer."
+            }
+            # Quick PE-header sanity check: byte 0/1 must be 'MZ' (0x4D 0x5A).
+            $head = [System.IO.File]::ReadAllBytes($dest)[0..1]
+            if (-not ($head[0] -eq 0x4D -and $head[1] -eq 0x5A)) {
+                throw "Installed $dest does not have a valid PE header (first bytes: $('{0:X2}{1:X2}' -f $head[0], $head[1])). The download was corrupted or modified post-install."
+            }
         } finally {
             Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
         }
 
         Set-PathPersistence -Dir $InstallDir -Scope $PathScope
 
-        if ($Verify -or $EasyMode) {
-            Write-Info "Running self-test..."
-            & $dest --version
-            if ($LASTEXITCODE -ne 0) { throw "Self-test failed" }
+        # Always run a self-test. The cost is a single `--version` invocation;
+        # the benefit is that we catch the "installed but won't run" failure
+        # mode (AV quarantine, WindowsApps stub shadowing, wrong-arch binary,
+        # Mark-of-the-Web blocking) *before* the script exits and the user is
+        # left staring at a confusing error from their next prompt.
+        Write-Info "Running self-test..."
+        $selfTest = & $dest --version 2>&1
+        if ($LASTEXITCODE -ne 0 -or -not $selfTest) {
+            Write-Host ""
+            Write-Host "Self-test FAILED for $dest" -ForegroundColor Red
+            Write-Host "  Output: $selfTest"
+            try {
+                $f = Get-Item -LiteralPath $dest
+                $h = [System.IO.File]::ReadAllBytes($dest)[0..1]
+                Write-Host "  File size: $($f.Length) bytes"
+                Write-Host "  PE magic:  $('{0:X2}{1:X2}' -f $h[0], $h[1]) (must be 4D5A)"
+                Write-Host "  SHA256:    $((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash)"
+            } catch {}
+            # Show whether some other ffs.exe is shadowing ours on PATH.
+            Write-Host "  All ffs in PATH:"
+            try {
+                Get-Command $BinaryName -All -ErrorAction SilentlyContinue |
+                    ForEach-Object { Write-Host "    $($_.Source)" }
+            } catch {}
+            Write-Host ""
+            Write-Host "Likely causes:"
+            Write-Host "  1. Antivirus/EDR quarantined the binary (Defender, CrowdStrike, etc)."
+            Write-Host "     Run:  Get-MpThreatDetection | Where-Object Resources -match 'ffs'"
+            Write-Host "     Then add an exclusion for $InstallDir and re-run."
+            Write-Host "  2. Another ffs.exe earlier on PATH is shadowing ours."
+            Write-Host "     Run:  where.exe ffs"
+            Write-Host "  3. Mark-of-the-Web is blocking execution."
+            Write-Host "     Run:  Unblock-File '$dest'"
+            throw "Self-test failed - see diagnostics above."
         }
+        Write-Success "Self-test passed: $($selfTest | Select-Object -First 1)"
     } else {
         Write-Info "Skipping binary install (-McpOnly)"
     }
@@ -484,9 +549,8 @@ function Main {
         $dest = Join-Path $InstallDir "$BinaryName.exe"
         Write-Host ""
         Write-Success "ffs installed to $dest"
-        try { & $dest --version 2>$null } catch {}
         Write-Host ""
-        Write-Host "Quick start:"
+        Write-Host "Quick start (open a new PowerShell window for PATH changes):"
         Write-Host "  ffs --help"
         Write-Host "  ffs index           # one-time warm-up"
         Write-Host "  ffs find <query>"
