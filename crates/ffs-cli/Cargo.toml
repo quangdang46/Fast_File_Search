@@ -1,6 +1,6 @@
 [package]
 name = "ffs-cli"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
 description = "Command line interface for ffs — unified code search and read tool."
@@ -16,7 +16,7 @@ default = ["zlob"]
 zlob = ["ffs-search/zlob"]
 
 [dependencies]
-ffs-search = { path = "../ffs-core" }
+ffs-search = { path = "../ffs-core", version = "0.1.2" }
 ffs-engine = { workspace = true }
 ffs-symbol = { workspace = true }
 ffs-budget = { workspace = true }
@@ -40,3 +40,4 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+

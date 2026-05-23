@@ -712,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "ffs-budget"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "criterion",
  "once_cell",
@@ -722,7 +722,7 @@ dependencies = [
 
 [[package]]
 name = "ffs-c"
-version = "0.7.2"
+version = "0.1.2"
 dependencies = [
  "ffs-budget",
  "ffs-engine",
@@ -738,7 +738,7 @@ dependencies = [
 
 [[package]]
 name = "ffs-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -764,7 +764,7 @@ dependencies = [
 
 [[package]]
 name = "ffs-engine"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ahash",
  "criterion",
@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "ffs-grep"
-version = "0.7.2"
+version = "0.1.2"
 dependencies = [
  "bstr",
  "memchr",
@@ -791,7 +791,7 @@ dependencies = [
 
 [[package]]
 name = "ffs-mcp"
-version = "0.7.2"
+version = "0.1.2"
 dependencies = [
  "clap",
  "ffs-budget",
@@ -814,7 +814,7 @@ dependencies = [
 
 [[package]]
 name = "ffs-nvim"
-version = "0.7.2"
+version = "0.1.2"
 dependencies = [
  "ahash",
  "blake3",
@@ -851,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "ffs-query-parser"
-version = "0.7.2"
+version = "0.1.2"
 dependencies = [
  "criterion",
  "zlob",
@@ -859,7 +859,7 @@ dependencies = [
 
 [[package]]
 name = "ffs-search"
-version = "0.7.2"
+version = "0.1.2"
 dependencies = [
  "ahash",
  "aho-corasick",
@@ -908,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "ffs-symbol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aho-corasick",
  "criterion",

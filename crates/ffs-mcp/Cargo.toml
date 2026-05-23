@@ -1,9 +1,12 @@
 [package]
 name = "ffs-mcp"
-version = "0.7.2"
+version = "0.1.2"
 edition = "2024"
-description = "MCP server for ffs file finder - drop-in replacement for AI code assistant search tools"
 license = "MIT"
+description = "MCP server for ffs file finder — drop-in replacement for AI code assistant search tools"
+repository = "https://github.com/quangdang46/fast_file_search"
+homepage = "https://github.com/quangdang46/fast_file_search"
+documentation = "https://github.com/quangdang46/fast_file_search#readme"
 
 [[bin]]
 name = "ffs-mcp"
@@ -14,8 +17,8 @@ default = ["zlob"]
 zlob = ["ffs/zlob"]
 
 [dependencies]
-ffs = { package = "ffs-search", path = "../ffs-core", default-features = false , version = "0.7.2" }
-ffs-query-parser = { path = "../ffs-query-parser", default-features = false , version = "0.7.2" }
+ffs = { package = "ffs-search", path = "../ffs-core", default-features = false , version = "0.1.2" }
+ffs-query-parser = { path = "../ffs-query-parser", default-features = false , version = "0.1.2" }
 ffs-engine = { workspace = true }
 ffs-budget = { workspace = true }
 ffs-symbol = { workspace = true }
@@ -31,3 +34,4 @@ tokio = { version = "1", features = ["full"] }
 tracing = { workspace = true }
 git2 = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
+

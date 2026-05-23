@@ -1,9 +1,12 @@
 [package]
 name = "ffs-symbol"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
 description = "Symbol indexing, bloom filters, and tree-sitter outline extraction for ffs."
+repository = "https://github.com/quangdang46/fast_file_search"
+homepage = "https://github.com/quangdang46/fast_file_search"
+documentation = "https://github.com/quangdang46/fast_file_search#readme"
 
 [dependencies]
 aho-corasick = { workspace = true }
@@ -40,3 +43,4 @@ harness = false
 [[bench]]
 name = "symbol_bench"
 harness = false
+

@@ -1,7 +1,12 @@
 [package]
 name = "ffs-nvim"
-version = "0.7.2"
+version = "0.1.2"
 edition = "2024"
+license = "MIT"
+description = "Blazingly fast fuzzy file picker for Neovim with typo resistance, SIMD acceleration, and frecency scoring"
+repository = "https://github.com/quangdang46/fast_file_search"
+homepage = "https://github.com/quangdang46/fast_file_search"
+documentation = "https://github.com/quangdang46/fast_file_search#readme"
 
 [lib]
 path = "src/lib.rs"
@@ -64,10 +69,10 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Local crates
-ffs = { package = "ffs-search", path = "../ffs-core", version = "0.7.2", features = [
+ffs = { package = "ffs-search", path = "../ffs-core", version = "0.1.2", features = [
 	"mimalloc-collect",
 ] }
-ffs-query-parser = { path = "../ffs-query-parser", version = "0.7.2" }
+ffs-query-parser = { path = "../ffs-query-parser", version = "0.1.2" }
 ffs-engine = { workspace = true }
 ffs-symbol = { workspace = true }
 ffs-budget = { workspace = true }
@@ -108,3 +113,4 @@ harness = false
 [[bench]]
 name = "query_tracker_bench"
 harness = false
+

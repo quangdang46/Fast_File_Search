@@ -1,10 +1,12 @@
 [package]
 name = "ffs-query-parser"
-version = "0.7.2"
+version = "0.1.2"
 edition = "2024"
-description = "Query parser for ffs file finder - includes specific syntax for various constraints like globs, extensions, regex etc"
 license = "MIT"
-authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlok.com>"]
+description = "Query parser for ffs file finder — includes specific syntax for various constraints like globs, extensions, regex etc"
+repository = "https://github.com/quangdang46/fast_file_search"
+homepage = "https://github.com/quangdang46/fast_file_search"
+documentation = "https://github.com/quangdang46/fast_file_search#readme"
 
 [lib]
 path = "src/lib.rs"
@@ -22,3 +24,4 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "parse_bench"
 harness = false
+

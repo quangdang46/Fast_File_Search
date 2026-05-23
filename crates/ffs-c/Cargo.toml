@@ -1,9 +1,12 @@
 [package]
 name = "ffs-c"
-version = "0.7.2"
+version = "0.1.2"
 edition = "2024"
-description = "Raw C api of ffs file finder"
 license = "MIT"
+description = "Raw C API for ffs file finder"
+repository = "https://github.com/quangdang46/fast_file_search"
+homepage = "https://github.com/quangdang46/fast_file_search"
+documentation = "https://github.com/quangdang46/fast_file_search#readme"
 
 [lib]
 crate-type = ["cdylib"]
@@ -17,10 +20,11 @@ mimalloc.workspace = true
 tracing.workspace = true
 git2.workspace = true
 
-ffs = { package = "ffs-search", path = "../ffs-core" , version = "0.7.2" }
-ffs-query-parser = { path = "../ffs-query-parser" , version = "0.7.2" }
+ffs = { package = "ffs-search", path = "../ffs-core", version = "0.1.2" }
+ffs-query-parser = { path = "../ffs-query-parser", version = "0.1.2" }
 ffs-engine = { workspace = true }
 ffs-budget = { workspace = true }
 ffs-symbol = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+

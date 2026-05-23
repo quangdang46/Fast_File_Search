@@ -2,10 +2,14 @@
 name = "ffs-grep"
 description = "File grepping logic for ffs"
 license = "MIT"
-authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlok.com>"]
-version = "0.7.2"
+authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlook.com>"]
+version = "0.1.2"
 edition = "2024"
+repository = "https://github.com/quangdang46/fast_file_search"
+homepage = "https://github.com/quangdang46/fast_file_search"
+documentation = "https://github.com/quangdang46/fast_file_search#readme"
 
 [dependencies]
 bstr = { version = "1.6.2", default-features = false, features = ["std"] }
 memchr = "2.6.3"
+

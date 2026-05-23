@@ -1,10 +1,13 @@
 [package]
 name = "ffs-search"
-version = "0.7.2"
+version = "0.1.2"
 edition = "2024"
 license = "MIT"
 authors = ["Dmitriy Kovalenko <dmtr.kovalenko@outlook.com>"]
 description = "Faboulous & Fast File Finder - a fast and extremely correct file finder SDK with typo resistance, SIMD, prefiltering, and more"
+repository = "https://github.com/quangdang46/fast_file_search"
+homepage = "https://github.com/quangdang46/fast_file_search"
+documentation = "https://github.com/quangdang46/fast_file_search#readme"
 
 [lib]
 path = "src/lib.rs"
@@ -83,3 +86,4 @@ ctor = "0.2"
 proptest = { version = "1", default-features = false, features = ["std", "fork"] }
 rand = { version = "0.8", features = ["small_rng"] }
 tempfile = "3.8"
+

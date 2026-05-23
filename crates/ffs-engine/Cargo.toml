@@ -1,12 +1,15 @@
 [package]
 name = "ffs-engine"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
 description = "Unified scanner, query dispatch, ranking and memory-budget enforcement for ffs."
+repository = "https://github.com/quangdang46/fast_file_search"
+homepage = "https://github.com/quangdang46/fast_file_search"
+documentation = "https://github.com/quangdang46/fast_file_search#readme"
 
 [dependencies]
-ffs-search = { path = "../ffs-core" }
+ffs-search = { path = "../ffs-core", version = "0.1.2" }
 ffs-symbol = { workspace = true }
 ffs-budget = { workspace = true }
 ffs-grep = { workspace = true }
@@ -25,3 +28,4 @@ criterion = { workspace = true }
 [[bench]]
 name = "dispatch_bench"
 harness = false
+
