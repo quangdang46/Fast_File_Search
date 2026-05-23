@@ -1,5 +1,3 @@
-PLENARY_DIR ?= ../plenary.nvim
-
 PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCLUDEDIR ?= $(PREFIX)/include
@@ -8,7 +6,7 @@ INCLUDEDIR ?= $(PREFIX)/include
 STRESS_RUSTFLAGS := --cfg stress
 FFS_STRESS_DEFAULT_SEED ?= 0xDEADBEEFCAFEBABE
 
-.PHONY: build build-c-lib install uninstall test test-rust test-lua test-version test-bun test-node prepare-bun prepare-node set-npm-version header test-stress test-stress-seeded test-stress-random
+.PHONY: build build-c-lib install uninstall test test-rust header test-stress test-stress-seeded test-stress-random
 
 all: format test lint
 
@@ -49,52 +47,14 @@ uninstall:
 	rm -f $(DESTDIR)$(INCLUDEDIR)/ffs.h
 	@echo "Removed ffs-c from $(DESTDIR)$(PREFIX)"
 
-test-setup:
-	@if [ ! -d "$(PLENARY_DIR)" ]; then \
-		echo "Cloning plenary.nvim..."; \
-		git clone --depth 1 https://github.com/nvim-lua/plenary.nvim $(PLENARY_DIR); \
-	fi
-
 test-rust:
-	cargo test --workspace --features zlob --exclude ffs-nvim
-
-test-lua: test-setup build
-	nvim --headless -u tests/minimal_init.lua \
-		-c "PlenaryBustedDirectory tests/ {minimal_init = 'tests/minimal_init.lua'}" 2>&1
-
-test-version: test-setup
-	nvim --headless -u tests/minimal_init.lua \
-		-c "PlenaryBustedFile tests/version_spec.lua" 2>&1
-
-prepare-bun: build
-	mkdir -p packages/ffs-bun/bin
-	cp target/release/libffs_c.dylib packages/ffs-bun/bin/ 2>/dev/null; \
-	cp target/release/libffs_c.so packages/ffs-bun/bin/ 2>/dev/null; \
-	cp target/release/ffs_c.dll packages/ffs-bun/bin/ 2>/dev/null; \
-	true
-
-prepare-node: build
-	mkdir -p packages/ffs-node/bin
-	cp target/release/libffs_c.dylib packages/ffs-node/bin/ 2>/dev/null; \
-	cp target/release/libffs_c.so packages/ffs-node/bin/ 2>/dev/null; \
-	cp target/release/ffs_c.dll packages/ffs-node/bin/ 2>/dev/null; \
-	true
-
-test-bun: prepare-bun
-	cd packages/ffs-bun && bun test src/
-	cd packages/pi-ffs && bun test test/
-
-test-node: prepare-node
-	cd packages/ffs-node && npm run build && node test/e2e.mjs
-
-test: test-rust test-lua test-version test-bun test-node
-
+	cargo test --workspace --features zlob
 
 test-stress-seeded:
 	FFS_STRESS_SEED="$${FFS_STRESS_SEED:-$(FFS_STRESS_DEFAULT_SEED)}" \
 	RUSTFLAGS="$(STRESS_RUSTFLAGS)" \
 	cargo test \
-		-p ffs-search \
+		-p ffs-core \
 		--test fuzz_git_watcher_stress \
 		--features zlob \
 		-- --nocapture stress_seeded
@@ -102,52 +62,28 @@ test-stress-seeded:
 test-stress-random:
 	RUSTFLAGS="$(STRESS_RUSTFLAGS)" \
 	cargo test \
-		-p ffs-search \
+		-p ffs-core \
 		--test fuzz_git_watcher_stress \
 		--features zlob \
 		-- --nocapture stress_random
 
 test-stress: test-stress-seeded test-stress-random
 
-# Update version in a package.json, including optionalDependencies.
-# Usage: make set-npm-version PKG=packages/ffs-bun VERSION=1.0.0-nightly.abc1234
-set-npm-version:
-	@test -n "$(PKG)" || (echo "PKG is required" && exit 1)
-	@test -n "$(VERSION)" || (echo "VERSION is required" && exit 1)
-	node -e " \
-		const fs = require('fs'); \
-		const pkg = JSON.parse(fs.readFileSync('$(PKG)/package.json', 'utf8')); \
-		pkg.version = '$(VERSION)'; \
-		if (pkg.optionalDependencies) { \
-			for (const dep of Object.keys(pkg.optionalDependencies)) { \
-				pkg.optionalDependencies[dep] = '$(VERSION)'; \
-			} \
-		} \
-		fs.writeFileSync('$(PKG)/package.json', JSON.stringify(pkg, null, 2) + '\n'); \
-	"
-	@echo "Set $(PKG) to $(VERSION)"
+test: test-rust
 
 format-rust:
 	cargo fmt --all
-format-lua:
-	stylua .
-format-ts:
-	bun format
 
-format: format-rust format-lua format-ts
+format: format-rust
 
 lint-rust:
 	cargo clippy --workspace --features zlob -- -D warnings
-lint-lua:
-	 ~/.luarocks/bin/luacheck .
-lint-ts:
-	bun lint
 
-lint: lint-rust lint-lua lint-ts
+lint: lint-rust
 
 check: format lint
 
-CRATES_TO_PUBLISH= ffs-grep ffs-query-parser ffs-search
+CRATES_TO_PUBLISH= ffs-grep ffs-query-parser ffs-budget ffs-engine
 
 set-version:
 	@test -n "$(V)" || (echo "V is required. Usage: make set-version V=0.2.0" && exit 1)

@@ -3,7 +3,6 @@ members = [
   "crates/ffs-c",
   "crates/ffs-core",
   "crates/ffs-mcp",
-  "crates/ffs-nvim",
   "crates/ffs-query-parser",
   "crates/ffs-grep",
   "crates/ffs-symbol",
@@ -41,7 +40,6 @@ memmap2 = "0.9"
 mimalloc = "0.1.47"
 zlob = "1.3.3"
 
-mlua = { version = "0.11.1", features = ["module", "luajit"] }
 neo_frizbee = { version = "0.10.2", features = ["match_end_col"] }
 notify = { version = "9.0.0-rc.3" }
 notify-debouncer-full = { package = "fff-notify-debouncer-full", version = "0.9.3" }

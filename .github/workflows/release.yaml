@@ -8,143 +8,9 @@ on:
   pull_request:
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CARGO_TERM_COLOR: always
 
 jobs:
-  build-nvim:
-    name: Build Neovim ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-    strategy:
-      matrix:
-        include:
-          ## Linux builds (using cargo-zigbuild)
-          # Glibc 2.31 (Ubuntu 20.04, Debian 11, RHEL 9).
-          # Rust 1.91+ requires glibc >= 2.31 for std::sys::random::getrandom,
-          # copy_file_range, and statx; earlier targets (2.17) no longer link.
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            zigbuild_target: x86_64-unknown-linux-gnu.2.31
-            artifact_name: target/x86_64-unknown-linux-gnu/ci/libffs_nvim.so
-            ext: so
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            zigbuild_target: aarch64-unknown-linux-gnu.2.31
-            artifact_name: target/aarch64-unknown-linux-gnu/ci/libffs_nvim.so
-            ext: so
-          # Musl (statically linked)
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            artifact_name: target/x86_64-unknown-linux-musl/ci/libffs_nvim.so
-            ext: so
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-musl
-            artifact_name: target/aarch64-unknown-linux-musl/ci/libffs_nvim.so
-            ext: so
-
-          ## Android (Termux)
-          - os: ubuntu-latest
-            target: aarch64-linux-android
-            artifact_name: target/aarch64-linux-android/ci/libffs_nvim.so
-            ext: so
-
-          ## macOS builds
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact_name: target/x86_64-apple-darwin/ci/libffs_nvim.dylib
-            ext: dylib
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact_name: target/aarch64-apple-darwin/ci/libffs_nvim.dylib
-            ext: dylib
-
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_name: target/x86_64-pc-windows-msvc/ci/ffs_nvim.dll
-            ext: dll
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            artifact_name: target/aarch64-pc-windows-msvc/ci/ffs_nvim.dll
-            ext: dll
-
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-
-      - name: Remove Git link.exe conflict
-        if: contains(matrix.os, 'windows')
-        shell: pwsh
-        run: |
-          $gitLink = "C:\Program Files\Git\usr\bin\link.exe"
-          if (Test-Path $gitLink) { Rename-Item $gitLink "link.exe.bak" }
-
-      - name: Install Lua
-        uses: leafo/gh-actions-lua@v12
-
-      - name: Determine version
-        id: version
-        run: lua scripts/determine-version.lua
-
-      - name: Set version
-        run: make set-version V="${{ steps.version.outputs.version }}"
-
-      - name: Install Rust
-        run: rustup target add ${{ matrix.target }}
-
-      - name: Install Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-
-      - name: Install cargo-zigbuild
-        if: contains(matrix.os, 'ubuntu')
-        run: cargo install cargo-zigbuild
-
-      - name: Build for Linux
-        if: contains(matrix.os, 'ubuntu') && !contains(matrix.target, 'android')
-        run: |
-          cargo zigbuild --profile ci --target ${{ matrix.zigbuild_target || matrix.target }} -p ffs-nvim --features zlob
-          mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
-
-      - name: Build for Android (Termux)
-        if: contains(matrix.target, 'android')
-        run: |
-          NDK_BIN="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
-
-          # NDK clang for C deps (libgit2, lmdb, blake3) that need Bionic sysroot headers
-          export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang"
-          export CXX_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang++"
-          export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_BIN/aarch64-linux-android24-clang"
-
-          cargo build --profile ci --target ${{ matrix.target }} -p ffs-nvim --features zlob
-          mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
-
-      - name: Build for macOS
-        if: contains(matrix.os, 'macos')
-        run: |
-          MACOSX_DEPLOYMENT_TARGET="13" cargo build --profile ci --target ${{ matrix.target }} -p ffs-nvim --features zlob
-          mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
-
-      - name: Ad-hoc sign macOS binary
-        if: contains(matrix.os, 'macos')
-        run: codesign --force --sign - "${{ matrix.target }}.${{ matrix.ext }}"
-
-      - name: Build for Windows
-        if: contains(matrix.os, 'windows')
-        shell: bash
-        run: |
-          cargo build --profile ci --target ${{ matrix.target }} -p ffs-nvim --features zlob
-          mv "${{ matrix.artifact_name }}" "${{ matrix.target }}.${{ matrix.ext }}"
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: nvim-${{ matrix.target }}
-          path: ${{ matrix.target }}.*
-
   build-c:
     name: Build C FFI ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -158,26 +24,22 @@ jobs:
             target: x86_64-unknown-linux-gnu
             zigbuild_target: x86_64-unknown-linux-gnu.2.31
             artifact_name: target/x86_64-unknown-linux-gnu/ci/libffs_c.so
-            npm_package: ffs-bin-linux-x64-gnu
             lib_filename: libffs_c.so
             ext: so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             zigbuild_target: aarch64-unknown-linux-gnu.2.31
             artifact_name: target/aarch64-unknown-linux-gnu/ci/libffs_c.so
-            npm_package: ffs-bin-linux-arm64-gnu
             lib_filename: libffs_c.so
             ext: so
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact_name: target/x86_64-unknown-linux-musl/ci/libffs_c.so
-            npm_package: ffs-bin-linux-x64-musl
             lib_filename: libffs_c.so
             ext: so
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             artifact_name: target/aarch64-unknown-linux-musl/ci/libffs_c.so
-            npm_package: ffs-bin-linux-arm64-musl
             lib_filename: libffs_c.so
             ext: so
 
@@ -192,13 +54,11 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: target/x86_64-apple-darwin/ci/libffs_c.dylib
-            npm_package: ffs-bin-darwin-x64
             lib_filename: libffs_c.dylib
             ext: dylib
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: target/aarch64-apple-darwin/ci/libffs_c.dylib
-            npm_package: ffs-bin-darwin-arm64
             lib_filename: libffs_c.dylib
             ext: dylib
 
@@ -206,13 +66,11 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: target/x86_64-pc-windows-msvc/ci/ffs_c.dll
-            npm_package: ffs-bin-win32-x64
             lib_filename: ffs_c.dll
             ext: dll
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             artifact_name: target/aarch64-pc-windows-msvc/ci/ffs_c.dll
-            npm_package: ffs-bin-win32-arm64
             lib_filename: ffs_c.dll
             ext: dll
 
@@ -227,9 +85,6 @@ jobs:
         run: |
           $gitLink = "C:\Program Files\Git\usr\bin\link.exe"
           if (Test-Path $gitLink) { Rename-Item $gitLink "link.exe.bak" }
-
-      - name: Install Lua
-        uses: leafo/gh-actions-lua@v12
 
       - name: Determine version
         id: version
@@ -286,25 +141,11 @@ jobs:
           cargo build --profile ci --target ${{ matrix.target }} -p ffs-c --features zlob
           mv "${{ matrix.artifact_name }}" "c-lib-${{ matrix.target }}.${{ matrix.ext }}"
 
-      - name: Prepare npm package
-        if: "!contains(matrix.target, 'android')"
-        shell: bash
-        run: |
-          # Copy the built binary into the platform npm package directory
-          cp "c-lib-${{ matrix.target }}.${{ matrix.ext }}" "packages/${{ matrix.npm_package }}/${{ matrix.lib_filename }}"
-
       - name: Upload C library artifact
         uses: actions/upload-artifact@v4
         with:
           name: c-lib-${{ matrix.target }}
           path: c-lib-${{ matrix.target }}.*
-
-      - name: Upload npm package artifact
-        if: "!contains(matrix.target, 'android')"
-        uses: actions/upload-artifact@v4
-        with:
-          name: npm-${{ matrix.npm_package }}
-          path: packages/${{ matrix.npm_package }}/
 
   build-mcp:
     name: Build MCP ${{ matrix.target }}
@@ -357,9 +198,6 @@ jobs:
         run: |
           $gitLink = "C:\Program Files\Git\usr\bin\link.exe"
           if (Test-Path $gitLink) { Rename-Item $gitLink "link.exe.bak" }
-
-      - name: Install Lua
-        uses: leafo/gh-actions-lua@v12
 
       - name: Determine version
         id: version
@@ -461,9 +299,6 @@ jobs:
           $gitLink = "C:\Program Files\Git\usr\bin\link.exe"
           if (Test-Path $gitLink) { Rename-Item $gitLink "link.exe.bak" }
 
-      - name: Install Lua
-        uses: leafo/gh-actions-lua@v12
-
       - name: Determine version
         id: version
         run: lua scripts/determine-version.lua
@@ -514,7 +349,7 @@ jobs:
 
   release:
     name: Release
-    needs: [build-nvim, build-c, build-mcp, build-cli]
+    needs: [build-c, build-mcp, build-cli]
     runs-on: ubuntu-latest
     # do not create releases on the forks (no permissions)
     if: github.event_name != 'pull_request' || github.event.pull_request.user.login == 'dmtrKovalenko'
@@ -523,29 +358,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Lua
-        uses: leafo/gh-actions-lua@v12
-
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./binaries
-
-      - name: Flatten and rename Neovim artifacts
-        working-directory: ./binaries
-        run: |
-          # Move nvim artifacts to root level with original naming
-          for dir in nvim-*/; do
-            target="${dir#nvim-}"
-            target="${target%/}"
-            for file in "$dir"*; do
-              if [ -f "$file" ]; then
-                filename=$(basename "$file")
-                mv "$file" "./$filename"
-              fi
-            done
-            rmdir "$dir" 2>/dev/null || true
-          done
 
       - name: Flatten C library artifacts
         working-directory: ./binaries
@@ -587,11 +403,6 @@ jobs:
             rmdir "$dir" 2>/dev/null || true
           done
 
-      - name: Remove npm package artifacts from release binaries
-        working-directory: ./binaries
-        run: |
-          rm -rf npm-*
-
       - name: Generate checksums
         working-directory: ./binaries
         run: |
@@ -620,10 +431,7 @@ jobs:
           body: |
             ${{ steps.version.outputs.is_release == 'true' && format('Release {0}', steps.version.outputs.version) || format('Nightly release from commit: {0}', github.sha) }}
 
-            ## Neovim Plugin
-            - `{target}.so` / `.dylib` / `.dll` - Lua module for Neovim
-
-            ## C FFI Library (for Bun/Node/Python)
+            ## C FFI Library
             - `c-lib-{target}.so` / `.dylib` / `.dll` - C FFI library
 
             ## MCP Server
@@ -636,14 +444,11 @@ jobs:
             ```sh
             # MCP server
             curl -fsSL https://raw.githubusercontent.com/dmtrKovalenko/ffs.nvim/main/install-mcp.sh | bash
-
-            # CLI from npm
-            npm install -g @ffs-cli/ffs
             ```
 
   crates-publish:
     name: Publish Rust crates
-    needs: [build-nvim, build-c, build-mcp]
+    needs: [build-c, build-mcp]
     runs-on: ubuntu-latest
     if: >-
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/download-version' || startsWith(github.ref, 'refs/tags/v')))
@@ -651,9 +456,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-
-      - name: Install Lua
-        uses: leafo/gh-actions-lua@v12
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -675,108 +477,3 @@ jobs:
           fi
 
           make publish-crates V="${{ steps.version.outputs.version }}"
-
-  npm-publish:
-    name: Publish npm packages
-    needs: [build-c]
-    runs-on: ubuntu-latest
-    if: >-
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/download-version' || startsWith(github.ref, 'refs/tags/v')))
-      || (github.event_name == 'pull_request' && github.head_ref == 'main')
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install Lua
-        uses: leafo/gh-actions-lua@v12
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "25"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Determine version
-        id: version
-        run: lua scripts/determine-version.lua
-
-      - name: Download npm package artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: npm-*
-          path: ./npm-packages
-
-      - name: Publish platform packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.npm_tag }}"
-
-          for pkg_dir in ./npm-packages/npm-*/; do
-            if [ -d "$pkg_dir" ]; then
-              pkg_name=$(node -p "require('${pkg_dir}package.json').name")
-              echo "Publishing ${pkg_name}@${VERSION} with tag ${TAG}..."
-
-              make set-npm-version PKG="$pkg_dir" VERSION="$VERSION"
-
-              cd "$pkg_dir"
-              npm publish --tag "$TAG" --access public || echo "Failed to publish ${pkg_name} (may already exist)"
-              cd -
-            fi
-          done
-
-      - name: Publish bun package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.npm_tag }}"
-
-          echo "Publishing @ffs-cli/ffs-bun@${VERSION} with tag ${TAG}..."
-          make set-npm-version PKG=packages/ffs-bun VERSION="$VERSION"
-
-          cd packages/ffs-bun
-          npm publish --tag "$TAG" --access public || echo "Failed to publish @ffs-cli/ffs-bun (may already exist)"
-
-      - name: Publish Node.js package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.npm_tag }}"
-
-          echo "Publishing @ffs-cli/ffs-node@${VERSION} with tag ${TAG}..."
-          make set-npm-version PKG=packages/ffs-node VERSION="$VERSION"
-
-          cd packages/ffs-node
-          npm install
-          npm run build
-          npm publish --tag "$TAG" --access public || echo "Failed to publish @ffs-cli/ffs-node (may already exist)"
-
-      - name: Publish pi-ffs package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.npm_tag }}"
-
-          echo "Publishing @ffs-cli/pi-ffs@${VERSION} with tag ${TAG}..."
-          make set-npm-version PKG=packages/pi-ffs VERSION="$VERSION"
-
-          cd packages/pi-ffs
-          npm publish --tag "$TAG" --access public || echo "Failed to publish @ffs-cli/pi-ffs (may already exist)"
-
-      - name: Publish ffs CLI package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.npm_tag }}"
-
-          echo "Publishing @ffs-cli/ffs@${VERSION} with tag ${TAG}..."
-          make set-npm-version PKG=packages/ffs VERSION="$VERSION"
-
-          cd packages/ffs
-          npm publish --tag "$TAG" --access public || echo "Failed to publish @ffs-cli/ffs (may already exist)"

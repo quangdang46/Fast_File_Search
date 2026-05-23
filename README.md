@@ -155,9 +155,9 @@ into the same engine — there is no duplicated search logic.
 ┌──────────────────────────────────────────────────────────────────────┐
 │  Frontends                                                           │
 │  ─────────                                                           │
-│  ffs-cli    ffs-mcp    ffs-nvim    ffs-c    ffs-node / ffs-bun       │
-│  (binary)   (stdio     (mlua       (C ABI   (TS wrappers over the C  │
-│             JSON-RPC)  cdylib)     .so)     library)                 │
+│  ffs-cli    ffs-mcp    ffs-c                                         │
+│  (binary)   (stdio     (C ABI                                        │
+│             JSON-RPC)  .so/.dylib/.dll)                              │
 └────────────────────────────────┬─────────────────────────────────────┘
                                  │ all surfaces share one core
                                  ▼
@@ -203,7 +203,6 @@ Each layer only depends on the ones below it. Adding a new frontend
 | `ffs-cli`          | The `ffs` binary, subcommand routing, on-disk cache (`.ffs/`).                     |
 | `ffs-mcp`          | JSON-RPC MCP server exposing 16 tools over stdio.                                  |
 | `ffs-c`            | Stable C ABI (`libffs_c`, header in `crates/ffs-c/include/ffs.h`).                 |
-| `ffs-nvim`         | mlua bindings producing `libffs_nvim` for the Neovim plugin.                       |
 
 ### Query path (e.g. `ffs callers UnifiedScanner`)
 
@@ -278,17 +277,17 @@ and load the cache directly — sub-200 ms on a Linux-kernel-sized repo.
 
 ### Background watcher (long-lived processes)
 
-When ffs is embedded as a library (`ffs-c`, `ffs-nvim`, `ffs-mcp`) it
+When ffs is embedded as a library (`ffs-c`, `ffs-mcp`) it
 keeps a single process alive and runs a notify-based background thread
 that incrementally updates the in-memory index on filesystem events.
-That is why MCP and Neovim hits stay sub-10 ms after the first call —
+That is why MCP hits stay sub-10 ms after the first call —
 no `.gitignore` re-read, no cold scan, no subprocess spawn.
 
 ```
 ┌─────────────────┐       fs events        ┌──────────────────────┐
 │ host process    │ ◄──────────────────────│ background_watcher   │
-│ (mcp / nvim /   │                        │  (notify crate)      │
-│  node / bun)    │                        └──────────┬───────────┘
+│ (mcp / cli /    │                        │  (notify crate)      │
+│  external C)    │                        └──────────┬───────────┘
 │                 │                                   │ patch
 │ ┌─────────────┐ │                                   ▼
 │ │ in-memory   │ ├──── query ────────────►   ffs-engine ──► result
@@ -388,19 +387,15 @@ cargo bench --features zlob \
 
 ---
 
-## Other surfaces
+## C ABI
 
-The same Rust core powers four other entry points. See each subdirectory for details.
+The C library provides a stable ABI for binding from other languages:
 
-| Surface | Path | What it is |
-|---|---|---|
-| **Neovim plugin** | [`lua/ffs/`](./lua/ffs/) + [`plugin/ffs.lua`](./plugin/ffs.lua) | High-performance file picker with live grep, frecency ranking, and tree-sitter-aware preview. |
-| **MCP server** | [`crates/ffs-mcp/`](./crates/ffs-mcp/) + [`install-mcp.sh`](./install-mcp.sh) | Drop-in replacement for the built-in file-search tools in Claude Code, Codex, OpenCode, Cursor, Cline, and other MCP-capable agents. |
-| **Node SDK** | [`packages/ffs-node/`](./packages/ffs-node/) | TypeScript wrapper over the C library for Node.js. |
-| **Bun SDK** | [`packages/ffs-bun/`](./packages/ffs-bun/) | TypeScript wrapper over the C library for Bun. |
-| **Pi extension** | [`packages/pi-ffs/`](./packages/pi-ffs/) | [pi](https://github.com/badlogic/pi-mono) extension that swaps native `find`/`grep` for ffs. |
-| **C ABI** | [`crates/ffs-c/`](./crates/ffs-c/) + [`crates/ffs-c/include/ffs.h`](./crates/ffs-c/include/ffs.h) | Stable C library — bind from C/C++, Zig, Go via cgo, Python via ctypes. |
-| **Rust crate** | [`crates/ffs-core/`](./crates/ffs-core/) | Native Rust SDK. |
+```bash
+make install  # installs libffs_c and ffs.h to /usr/local
+```
+
+See [`crates/ffs-c/include/ffs.h`](./crates/ffs-c/include/ffs.h) for the API surface.
 
 ---
 
@@ -420,7 +415,6 @@ if you don't have Zig installed.
 The full workspace (`make build`) also produces:
 - `target/release/ffs-mcp` — MCP server binary
 - `target/release/libffs_c.{so,dylib,dll}` — C FFI library
-- `target/release/libffs_nvim.{so,dylib,dll}` — Neovim cdylib
 
 ---
 
@@ -432,20 +426,11 @@ crates/
   ffs-cli/          # the `ffs` binary
   ffs-mcp/          # MCP server (`ffs-mcp` binary)
   ffs-c/            # C FFI library (libffs_c, header in include/ffs.h)
-  ffs-nvim/         # mlua bindings for the Neovim plugin
   ffs-engine/       # unified scanner + dispatch + ranking
   ffs-symbol/       # tree-sitter symbol index, bloom + bigram filters
   ffs-budget/       # token-budget reader, comment/whitespace filters
   ffs-grep/         # SIMD literal/regex grep
   ffs-query-parser/ # query language parser (constraints, fuzzy, regex modes)
-lua/ffs/            # Neovim plugin code
-plugin/ffs.lua      # Neovim auto-load
-packages/
-  ffs/              # @ffs-cli/ffs npm wrapper around the CLI binary
-  ffs-node/         # @ffs-cli/ffs-node Node SDK
-  ffs-bun/          # @ffs-cli/ffs-bun Bun SDK
-  pi-ffs/           # @ffs-cli/pi-ffs Pi extension
-  ffs-bin-*/        # @ffs-cli/ffs-bin-* prebuilt native libs (per-platform)
 install.sh          # CLI installer (this README's curl|bash target)
 install-mcp.sh      # MCP server installer
 .github/workflows/
@@ -459,8 +444,8 @@ install-mcp.sh      # MCP server installer
 ## Contributing
 
 PRs welcome. Run `make check` before submitting:
-- `make format` (rustfmt + stylua + biome)
-- `make lint` (clippy + luacheck + biome)
+- `make format` (rustfmt)
+- `make lint` (clippy)
 - `make test`
 
 Agentic coding tools are welcome to be used; human review is mandatory.

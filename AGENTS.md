@@ -1,111 +1,73 @@
 # To Clankers
 
-This repository contains **FFS.nvim (Fast File Finder)**, a high-performance file picker for Neovim inspired by blink.cmp's fuzzy matching technology. It's NOT a completion plugin, but rather a standalone file finder with advanced fuzzy search and frecency scoring. The project aims to be the drop-in replacement for telescope, fzf-lua, snacks.picker and similar plugins, focusing on speed, accuracy search and usability features.
+This repository contains **FFS**, a high-performance file search CLI and MCP server
+with tree-sitter powered code navigation. It provides typo-resistant fuzzy matching,
+frecency scoring, and token-budget aware file reading for AI agents.
 
 ## Development Commands
 
-Always prefer Makefile commands listed to the cargo/bun/node if possible.
+Always prefer Makefile commands listed to cargo directly when possible.
 
 ### Building
 
 - `make build` - build everything
 
-### Testing and Development Tools
+### Testing
 
-This project does not have a traditional test suite. Testing is done through:
-
-- Create e2e local test file for Neovim: Load any Lua test file with `nvim -l <test_file>`
-- Write inline rust unit tests for any functionality that is standalone and scoped within a single function
+This project uses inline Rust unit tests embedded in modules for standalone,
+scoped functionality.
 
 ### Code Quality
 
-- `make lint` - Rust linting and code analysis
-- `make format` - Format all code 
-- `make test` - Run unit tests (limited coverage, primarily integration testing)
+- `make lint` - Rust linting with clippy
+- `make format` - Format Rust code with rustfmt
+- `make test` - Run workspace tests
 
-When doing code make sure to REDUCE SIZE OF COMMENTS. This is very important. Every comment should be concise 1-2 liner maximum 4 lines if describes really extensive and unnatural concept.
-
-### Important coding rules
-
-- Do not add doc comments to the private structs and functions.
-- Do not make public structs if something can be private
-
+Keep comments concise: 1-2 lines maximum, 4 lines only for complex concepts.
 
 ## Architecture
 
-Everything that is performance critical happens in rust world, everything that is neovim specific happens in the lua code.
+```
+ffs-cli     (Rust binary - commands)
+ffs-mcp     (Rust binary - MCP server over stdio)
+ffs-c       (C ABI library)
+─────────────────────────────────────────
+ffs-engine  (dispatch, ranking, memory)
+ffs-grep    (SIMD search)
+ffs-symbol  (tree-sitter index)
+ffs-budget  (token-aware reader)
+ffs-query-parser  (query DSL)
+─────────────────────────────────────────
+ffs-core    (scan, frecency, scoring, git, watcher)
+```
 
-There are 3 main components:
+## Crates
 
-- Rust binary with the global file picker state containing index of all files
-- Background thread with the file system watcher that updates the index in real time
-- Lua UI layer that renders the picker, handles user input, and calls the rust functions via FFI
+| Crate | Role |
+|-------|------|
+| `ffs-core` | Filesystem scan, frecency, fuzzy scoring, git integration, watcher |
+| `ffs-query-parser` | Parses query DSL (globs, negations, regex, fuzzy fallback) |
+| `ffs-symbol` | Tree-sitter symbol index, bloom filter, outline cache |
+| `ffs-grep` | SIMD literal & regex content search |
+| `ffs-budget` | Token-aware reader with filters |
+| `ffs-engine` | Unified scanner, dispatch, ranking |
+| `ffs-cli` | CLI commands (find, grep, symbol, read, map, etc.) |
+| `ffs-mcp` | MCP server speaking JSON-RPC over stdio |
+| `ffs-c` | C ABI library for external bindings |
 
-There are 2 databases:
+## Build System
 
-- Frecency database (LMDB) that tracks file access patterns for scoring
-- Query history database used to track the user's previous search queries
+- `Cargo.toml` - Rust workspace and dependencies
+- `rust-toolchain.toml` - Rust toolchain specification
+- `Cross.toml` - Cross-compilation via Zig
 
-### Key Files
-
-- `lua/ffs/main.lua` - Public API entry point
-- `lua/ffs/main.lua` - Public API (find_files, search, change_directory)
-- `lua/ffs/core.lua` - Initialization, autocmds, global state management
-- `lua/ffs/picker_ui.lua` - UI rendering, layout calculation, keymaps
-- `lua/ffs/file_picker/preview.lua` - File preview with syntax highlighting
-- `lua/ffs/file_picker/image.lua` - Image preview (snacks.nvim integration)
-- `lua/ffs/conf.lua` - Default config
-- `lua/ffs/rust/init.lua` - Loads compiled Rust shared library
-
-**Rust Side:**
-
-- `lua/ffs/rust/lib.rs` - FFI bindings, global state (FILE_PICKER, FRECENCY)
-- `lua/ffs/rust/file_picker.rs` - Core FilePicker struct, indexing, background watcher
-- `lua/ffs/rust/frecency.rs` - Frecency database (LMDB) and scoring
-- `lua/ffs/rust/query_tracker.rs` - Search query history tracking
-- `lua/ffs/rust/score.rs` - Fuzzy match scoring with frizbee integration
-- `lua/ffs/rust/git.rs` - Git status caching and repository detection
-- `lua/ffs/rust/background_watcher.rs` - File system watcher thread
-
-### Scoring Algorithm
-
-Located at the score.rs file
-
-### Build System
-
-- `Cargo.toml` - Rust dependencies and build configuration (package name: `ffs_nvim`)
-- `rust-toolchain.toml` - Specifies Rust nightly toolchain with required components
-- `Cross.toml` - Cross-compilation settings using Zig for Linux targets
-- **CI/CD Workflows**:
-  - `.github/workflows/rust.yml` - Rust testing, formatting, and clippy checks
-  - `.github/workflows/release.yaml` - Automated multi-platform builds
-  - `.github/workflows/stylua.yaml` - Lua code formatting validation
-  - `.github/workflows/nix.yml` - Nix build validation
-- **Cross-compilation Support**: Uses `cross` tool with Zig backend for efficient cross-compilation
-
-## Development Notes
-
-### Working with Rust Code
+## Important coding rules
 
 - Prefer struct methods over functions
-- If there is more than 2 impls in the file - create new file
-- Smaller concise comments over giant comment blocks
-- Do not add doc comments to the private functions/structs
-- Be very careful around locking and better double check with the human if something is going to require potentially long lock on a mutex/rwlock
-
-### Working with lua code
-
-- Document the types of public functions in every module
-- Use `vim.validate()` for validating user inputs in public functions
-- Try to reuse as much of existing functions as possible
-- When working on new features for the UI **IT IS EXTREMELY IMPORTANT** to keep the core functionality of navigating between files, selecting, and seeing the preview working as is. NEVER break anything from the core UI functionality, only add new features on top of the current UI.
-- When making a large chunk of code make lua test that opens neovim at `~/dev/lightsource` and opens the picker to test the ui functionality across the actual code.
-- When adding a new highlights or any new shortcuts and configurable UI options add them to the neovim config. AND IMPORTANT: update the README.md with the new configuration options.
-
-### UI rendering
-
-When working on the UI changeds IT IS EXTREMELY important for you to test it for both prompt_position="bottom" and prompt_position="top" as the rendering logic is different for both of them in both rust and lua world. When the prompt is positioed in the bottom everything should work the same way as the top but would be reversed in order. (though navigation is same for both)
+- If there are more than 2 impl blocks in a file, extract to a new file
+- Do not add doc comments to private structs and functions
+- Be very careful around locking - prefer RwLock over Mutex for read-heavy workloads
 
 ## Top level API that can not introduce breaking changes under any circumstance
 
-Top level rust, lua, C, and bun APIs can not be changed under any circumstance
+Rust, C, and MCP APIs can not be changed under any circumstance
