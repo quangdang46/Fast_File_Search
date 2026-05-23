@@ -238,6 +238,11 @@ impl ScanJob {
                 mode,
             ) {
                 Ok(watcher) => {
+                    // On macOS, FSEventStreamCreate schedules the stream on the runloop
+                    // but needs time to actually start delivering events.
+                    #[cfg(target_os = "macos")]
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+
                     if let Ok(mut guard) = shared_picker.write()
                         && let Some(picker) = guard.as_mut()
                     {

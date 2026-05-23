@@ -841,6 +841,13 @@ impl FilePicker {
             self.mode,
         )?;
         self.background_watcher = Some(watcher);
+
+        // On macOS, FSEventStreamCreate schedules the stream on the runloop but
+        // it needs time to actually start delivering events. Without this delay,
+        // events created immediately after wait_for_watcher returns can be missed.
+        #[cfg(target_os = "macos")]
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
         self.signals.watcher_ready.store(true, Ordering::Release);
         Ok(())
     }
