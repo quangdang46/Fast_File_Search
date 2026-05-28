@@ -1,5 +1,5 @@
 use super::db_healthcheck::DbHealthChecker;
-use super::lmdb::{LmdbStore, is_map_full};
+use super::lmdb::{DbHealth, LmdbStore, is_map_full};
 use crate::error::{Error, Result};
 use crate::file_picker::FfsMode;
 use crate::git::is_modified_status;
@@ -24,6 +24,7 @@ const AI_MAX_HISTORY_DAYS: f64 = 7.0; // Only consider accesses within 7 days
 pub struct FrecencyTracker {
     env: Env,
     db: Database<Bytes, SerdeBincode<VecDeque<u64>>>,
+    health: DbHealth,
 }
 
 const MODIFICATION_THRESHOLDS: [(i64, u64); 5] = [
@@ -48,6 +49,10 @@ impl DbHealthChecker for FrecencyTracker {
         &self.env
     }
 
+    fn is_healthy(&self) -> bool {
+        self.health.is_healthy()
+    }
+
     fn count_entries(&self) -> Result<Vec<(&'static str, u64)>> {
         let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
         let count = self.db.len(&rtxn).map_err(Error::DbRead)?;
@@ -57,13 +62,30 @@ impl DbHealthChecker for FrecencyTracker {
 }
 
 impl LmdbStore for FrecencyTracker {
+    const LABEL: &'static str = "frecency";
     const MAX_DBS: u32 = 0;
     // 10 MiB hard ceiling. Owner's db after years of use is ~560 KiB, so this
-    // leaves ~18× headroom while capping runaway growth (see GH issue #437).
+    // leaves ~18x headroom while capping runaway growth (see GH issue #437).
     const MAP_SIZE: usize = 10 * 1024 * 1024;
-    // Nuke the db when it exceeds 8 MiB on disk — leaves a small margin under
-    // MAP_SIZE so we don't hit MDB_MAP_FULL before the open-time erase fires.
+    // Nuke when exceeds 8 MiB — leaves margin under MAP_SIZE so we don't
+    // hit MDB_MAP_FULL before the open-time erase fires.
     const SIZE_CAP_BYTES: u64 = 8 * 1024 * 1024;
+
+    fn env(&self) -> &Env {
+        &self.env
+    }
+
+    fn health(&self) -> &DbHealth {
+        &self.health
+    }
+
+    fn purge_stale_data(env: &Env) -> Result<()> {
+        let (deleted, pruned) = Self::purge_stale_entries_static(env)?;
+        if deleted > 0 || pruned > 0 {
+            tracing::info!(deleted, pruned, "Frecency GC purged entries");
+        }
+        Ok(())
+    }
 }
 
 impl FrecencyTracker {
@@ -74,11 +96,10 @@ impl FrecencyTracker {
 
     pub fn open(db_path: impl AsRef<Path>) -> Result<Self> {
         let db_path = db_path.as_ref();
-        let env = Self::open_env(db_path)?;
+        let (env, health) = Self::open_env(db_path)?;
 
         let db = Self::open_database_safe(&env, None)?;
-
-        Ok(FrecencyTracker { db, env })
+        Ok(FrecencyTracker { db, env, health })
     }
 
     #[deprecated(
@@ -91,16 +112,6 @@ impl FrecencyTracker {
     }
 
     /// Spawns a background thread to purge stale frecency entries and compact the database.
-    /// Run it once in a while to purge old pages and keep DB file size reasonable.
-    ///
-    /// It's okay to not join this thread since it acquires locks for the db access
-    ///
-    /// ```
-    /// use ffs_search::frecency::FrecencyTracker;
-    /// use ffs_search::SharedFrecency;
-    /// let shared_frecency: SharedFrecency = Default::default();
-    /// let _ = FrecencyTracker::spawn_gc(shared_frecency, "/path/to/frecency_db".into()).ok();
-    /// ```
     pub fn spawn_gc(
         shared: SharedFrecency,
         db_path: String,
@@ -125,13 +136,6 @@ impl FrecencyTracker {
             let Some(ref tracker) = *guard else {
                 return;
             };
-
-            // Clear stale readers here (on a background thread) rather than in
-            // open_env — clear_stale_readers needs the writer mutex which can
-            // block indefinitely on a stuck lock if called on the main thread.
-            if let Err(e) = tracker.env.clear_stale_readers() {
-                tracing::debug!("clear_stale_readers failed: {e}");
-            }
 
             match tracker.purge_stale_entries() {
                 Ok(result) => result,
@@ -164,7 +168,6 @@ impl FrecencyTracker {
         let now = self.get_now();
         let cutoff_time = now.saturating_sub((MAX_HISTORY_DAYS * SECONDS_PER_DAY) as u64);
 
-        // Collect entries to delete or update
         let rtxn = self.env.read_txn().map_err(Error::DbStartReadTxn)?;
         let mut to_delete: Vec<Vec<u8>> = Vec::new();
         let mut to_update: Vec<(Vec<u8>, VecDeque<u64>)> = Vec::new();
@@ -173,19 +176,11 @@ impl FrecencyTracker {
         for result in iter {
             let (key, accesses) = result.map_err(Error::DbRead)?;
 
-            // Timestamps are chronologically ordered (oldest at front).
-            // Find the first timestamp that is still within the retention window.
             let fresh_start = accesses.iter().position(|&ts| ts >= cutoff_time);
             match fresh_start {
-                None => {
-                    // All timestamps are stale — delete the entire entry
-                    to_delete.push(key.to_vec());
-                }
-                Some(0) => {
-                    // All timestamps are fresh — nothing to do
-                }
+                None => to_delete.push(key.to_vec()),
+                Some(0) => {}
                 Some(start) => {
-                    // Some timestamps are stale — keep only the fresh ones
                     let pruned: VecDeque<u64> = accesses.iter().skip(start).copied().collect();
                     to_update.push((key.to_vec(), pruned));
                 }
@@ -197,7 +192,6 @@ impl FrecencyTracker {
             return Ok((0, 0));
         }
 
-        // Apply all changes in a single write transaction
         let mut wtxn = self.env.write_txn().map_err(Error::DbStartWriteTxn)?;
         for key in &to_delete {
             self.db.delete(&mut wtxn, key).map_err(Error::DbWrite)?;
@@ -206,6 +200,52 @@ impl FrecencyTracker {
             self.db
                 .put(&mut wtxn, key, accesses)
                 .map_err(Error::DbWrite)?;
+        }
+        wtxn.commit().map_err(Error::DbCommit)?;
+
+        Ok((to_delete.len(), to_update.len()))
+    }
+
+    /// Static version for use from LmdbStore::purge_stale_data.
+    #[allow(dead_code)]
+    fn purge_stale_entries_static(env: &Env) -> Result<(usize, usize)> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let cutoff_time = now.saturating_sub((MAX_HISTORY_DAYS * SECONDS_PER_DAY) as u64);
+
+        let db: Database<Bytes, SerdeBincode<VecDeque<u64>>> = Self::open_database_safe(env, None)?;
+
+        let rtxn = env.read_txn().map_err(Error::DbStartReadTxn)?;
+        let mut to_delete: Vec<Vec<u8>> = Vec::new();
+        let mut to_update: Vec<(Vec<u8>, VecDeque<u64>)> = Vec::new();
+
+        let iter = db.iter(&rtxn).map_err(Error::DbRead)?;
+        for result in iter {
+            let (key, accesses) = result.map_err(Error::DbRead)?;
+            let fresh_start = accesses.iter().position(|&ts| ts >= cutoff_time);
+            match fresh_start {
+                None => to_delete.push(key.to_vec()),
+                Some(0) => {}
+                Some(start) => {
+                    let pruned: VecDeque<u64> = accesses.iter().skip(start).copied().collect();
+                    to_update.push((key.to_vec(), pruned));
+                }
+            }
+        }
+        drop(rtxn);
+
+        if to_delete.is_empty() && to_update.is_empty() {
+            return Ok((0, 0));
+        }
+
+        let mut wtxn = env.write_txn().map_err(Error::DbStartWriteTxn)?;
+        for key in &to_delete {
+            db.delete(&mut wtxn, key).map_err(Error::DbWrite)?;
+        }
+        for (key, accesses) in &to_update {
+            db.put(&mut wtxn, key, accesses).map_err(Error::DbWrite)?;
         }
         wtxn.commit().map_err(Error::DbCommit)?;
 
@@ -268,6 +308,7 @@ impl FrecencyTracker {
         let mut wtxn = self.env.write_txn().map_err(Error::DbStartWriteTxn)?;
         if let Err(e) = self.db.put(&mut wtxn, &key_hash, &accesses) {
             if is_map_full(&e) {
+                self.health.mark_unhealthy("MDB_MAP_FULL on put");
                 tracing::error!(
                     ?path,
                     "Frecency DB hit MDB_MAP_FULL; dropping write — db will be \
@@ -281,6 +322,7 @@ impl FrecencyTracker {
         wtxn.commit()
             .inspect_err(|e| {
                 if is_map_full(e) {
+                    self.health.mark_unhealthy("MDB_MAP_FULL on commit");
                     tracing::error!(
                         ?path,
                         "Frecency DB hit MDB_MAP_FULL on commit; dropping write"
@@ -319,7 +361,7 @@ impl FrecencyTracker {
 
         for &access_time in accesses.iter().rev() {
             if access_time < cutoff_time {
-                break; // All remaining entries are older, stop processing
+                break;
             }
 
             let days_ago = (now.saturating_sub(access_time) as f64) / SECONDS_PER_DAY;
@@ -330,7 +372,7 @@ impl FrecencyTracker {
         let normalized_frecency = if total_frecency <= 10.0 {
             total_frecency
         } else {
-            10.0 + (total_frecency - 10.0).sqrt() // Diminishing: >10 accesses grow slowly
+            10.0 + (total_frecency - 10.0).sqrt()
         };
 
         normalized_frecency.round() as i64
@@ -407,30 +449,26 @@ mod tests {
 
     #[test]
     fn test_frecency_calculation() {
-        let current_time = 1000000000; // Base timestamp
+        let current_time = 1000000000;
 
         let score = calculate_test_frecency_score(&[], current_time);
         assert_eq!(score, 0);
 
-        let accesses = [current_time]; // Accessed right now
+        let accesses = [current_time];
         let score = calculate_test_frecency_score(&accesses, current_time);
-        assert_eq!(score, 1); // 1.0 decay factor = 1
+        assert_eq!(score, 1);
 
-        let ten_days_seconds = 10 * 86400; // 10 days in seconds
+        let ten_days_seconds = 10 * 86400;
         let accesses = [current_time - ten_days_seconds];
         let score = calculate_test_frecency_score(&accesses, current_time);
-        assert_eq!(score, 1); // ~0.5 decay factor rounds to 1
+        assert_eq!(score, 1);
 
-        let accesses = [
-            current_time,          // Today
-            current_time - 86400,  // 1 day ago
-            current_time - 172800, // 2 days ago
-        ];
+        let accesses = [current_time, current_time - 86400, current_time - 172800];
         let score = calculate_test_frecency_score(&accesses, current_time);
-        assert!(score > 2 && score < 4, "Score: {}", score); // About 3 accesses with decay
+        assert!(score > 2 && score < 4, "Score: {}", score);
 
         let thirty_days = 30 * 86400;
-        let accesses = [current_time - thirty_days]; // 30 days ago
+        let accesses = [current_time - thirty_days];
         let score = calculate_test_frecency_score(&accesses, current_time);
         assert!(
             score < 2,
@@ -461,12 +499,8 @@ mod tests {
         let current_time = tracker.get_now();
         let git_status = Some(git2::Status::WT_MODIFIED);
 
-        // At 5 minutes: should interpolate between 16 and 8 points
         let five_minutes_ago = current_time - (5 * 60);
         let score = tracker.get_modification_score(five_minutes_ago, git_status, FfsMode::Neovim);
-
-        // Expected: 16 - (8 * 3 / 13) = 16 - 1 = 15 points
-        // (time_offset = 5-2 = 3, time_range = 15-2 = 13, points_diff = 16-8 = 8)
         assert_eq!(score, 15, "5 minutes should interpolate to 15 points");
 
         let two_minutes_ago = current_time - (2 * 60);
@@ -478,17 +512,12 @@ mod tests {
             tracker.get_modification_score(fifteen_minutes_ago, git_status, FfsMode::Neovim);
         assert_eq!(score, 8, "15 minutes should be exactly 8 points");
 
-        // At 12 hours: should interpolate between 4 and 2 points
         let twelve_hours_ago = current_time - (12 * 60 * 60);
         let score = tracker.get_modification_score(twelve_hours_ago, git_status, FfsMode::Neovim);
-        // Expected: 4 - (2 * 11 / 23) = 4 - 0 = 4 points (integer division)
-        // (time_offset = 12-1 = 11 hours, time_range = 24-1 = 23 hours, points_diff = 4-2 = 2)
         assert_eq!(score, 4, "12 hours should interpolate to 4 points");
 
-        // at 18 hours for more significant interpolation
         let eighteen_hours_ago = current_time - (18 * 60 * 60);
         let score = tracker.get_modification_score(eighteen_hours_ago, git_status, FfsMode::Neovim);
-        // Expected: 4 - (2 * 17 / 23) = 4 - 1 = 3 points
         assert_eq!(score, 3, "18 hours should interpolate to 3 points");
 
         let score = tracker.get_modification_score(five_minutes_ago, None, FfsMode::Neovim);

@@ -447,6 +447,8 @@ pub struct FilePickerOptions {
     pub cache_budget: Option<ContentCacheBudget>,
     /// When `false`, `new_with_shared_state` skips the background file watcher.
     pub watch: bool,
+    /// Follow symbolic links during file indexing.
+    pub follow_symlinks: bool,
 }
 
 impl Default for FilePickerOptions {
@@ -458,6 +460,7 @@ impl Default for FilePickerOptions {
             mode: FfsMode::default(),
             cache_budget: None,
             watch: true,
+            follow_symlinks: false,
         }
     }
 }
@@ -474,6 +477,7 @@ pub struct FilePicker {
     enable_mmap_cache: bool,
     enable_content_indexing: bool,
     watch: bool,
+    follow_symlinks: bool,
 }
 
 impl std::fmt::Debug for FilePicker {
@@ -525,6 +529,10 @@ impl FilePicker {
 
     pub fn has_watcher(&self) -> bool {
         self.watch
+    }
+
+    pub fn follows_symlinks(&self) -> bool {
+        self.follow_symlinks
     }
 
     pub fn mode(&self) -> FfsMode {
@@ -714,6 +722,7 @@ impl FilePicker {
             enable_mmap_cache: options.enable_mmap_cache,
             enable_content_indexing: options.enable_content_indexing,
             watch: options.watch,
+            follow_symlinks: options.follow_symlinks,
         })
     }
 
@@ -738,6 +747,7 @@ impl FilePicker {
         let content_indexing = picker.enable_content_indexing;
         let watch = picker.watch;
         let mode = picker.mode;
+        let follow_symlinks = picker.follow_symlinks;
 
         let signals = picker.scan_signals();
         let scanned_files_counter = picker.scanned_files_counter();
@@ -765,6 +775,7 @@ impl FilePicker {
                 watch,
                 auto_cache_budget: true,
                 install_watcher: true,
+                follow_symlinks,
             },
         )
         .spawn();
@@ -794,6 +805,7 @@ impl FilePicker {
             &self.scanned_files_count,
             &empty_frecency,
             self.mode,
+            self.follow_symlinks,
         )?;
 
         self.sync_data = sync;
@@ -1817,6 +1829,7 @@ impl FileSync {
         synced_files_count: &Arc<AtomicUsize>,
         shared_frecency: &SharedFrecency,
         mode: FfsMode,
+        follow_symlinks: bool,
     ) -> Result<FileSync, Error> {
         use ignore::WalkBuilder;
 
@@ -1835,7 +1848,7 @@ impl FileSync {
             .git_exclude(true)
             .git_global(true)
             .ignore(true)
-            .follow_links(false)
+            .follow_links(follow_symlinks)
             .threads(bg_threads);
 
         if !is_git_repo && let Some(overrides) = non_git_repo_overrides(base_path) {
@@ -2055,7 +2068,12 @@ fn is_known_binary_extension(path: &Path) -> bool {
         ext,
         // Images
         "png" | "jpg" | "jpeg" | "gif" | "bmp" | "ico" | "webp" | "tiff" | "tif" | "avif" |
-        "heic" | "psd" | "icns" | "cur" | "raw" | "cr2" | "nef" | "dng" |
+        "heic" | "heif" | "jxl" | "jp2" | "j2k" | "psd" | "icns" | "cur" | "raw" |
+        "cr2" | "nef" | "dng" | "tga" |
+        // GPU / VFX texture formats
+        "rgbe" | "hdr" | "exr" | "dds" | "ktx" | "ktx2" | "pvr" | "astc" |
+        // Adobe Illustrator / Apple webarchive / MIME HTML archive
+        "ai" | "webarchive" | "mhtml" |
         // Video/Audio
         "mp4" | "avi" | "mov" | "wmv" | "mkv" | "mp3" | "wav" | "flac" | "ogg" | "m4a" |
         "aac" | "webm" | "flv" | "mpg" | "mpeg" | "wma" | "opus" | "pcm" | "reapeaks" |
@@ -2083,9 +2101,9 @@ fn is_known_binary_extension(path: &Path) -> bool {
         "swiftdeps" | "swiftdeps~" | "swiftdoc" | "swiftmodule" | "swiftsourceinfo" |
         // ML/Data Science
         "npy" | "npz" | "pkl" | "pickle" | "h5" | "hdf5" | "pt" | "pth" | "onnx" |
-        "safetensors" | "tfrecord" |
+        "safetensors" | "tfrecord" | "tflite" | "gguf" | "ggml" | "joblib" |
         // 3D/Game
-        "glb" | "fbx" | "blend" | "blp" | "tga" |
+        "glb" | "fbx" | "blend" | "blp" |
         // Game engines / Unity-Unreal side-files
         "meta" | "dat" | "tfx" | "dia" | "journal" | "toc" | "thm" | "pfl" |
         "shadow" | "scan" | "flm" | "bcmap" | "userinfo" |

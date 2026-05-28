@@ -1,5 +1,5 @@
 use super::db_healthcheck::DbHealthChecker;
-use super::lmdb::{LmdbStore, is_map_full};
+use super::lmdb::{DbHealth, LmdbStore, is_map_full};
 use crate::error::Error;
 use heed::types::{Bytes, SerdeBincode};
 use heed::{Database, Env};
@@ -13,9 +13,9 @@ const MAX_HISTORY_ENTRIES: usize = 128;
 /// Simplified QueryFileEntry without redundant fields
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct QueryMatchEntry {
-    pub file_path: PathBuf, // File that was actually opened
-    pub open_count: u32,    // Number of times opened with this query
-    pub last_opened: u64,   // Unix timestamp
+    pub file_path: PathBuf,
+    pub open_count: u32,
+    pub last_opened: u64,
 }
 
 /// Entry for query history tracking
@@ -28,17 +28,19 @@ struct HistoryEntry {
 #[derive(Debug)]
 pub struct QueryTracker {
     env: Env,
-    // Database for (project_path, query) -> QueryMatchEntry mappings
     query_file_db: Database<Bytes, SerdeBincode<QueryMatchEntry>>,
-    // Database for project_path -> VecDeque<HistoryEntry> mappings (file picker)
     query_history_db: Database<Bytes, SerdeBincode<VecDeque<HistoryEntry>>>,
-    // Database for project_path -> VecDeque<HistoryEntry> mappings (grep)
     grep_query_history_db: Database<Bytes, SerdeBincode<VecDeque<HistoryEntry>>>,
+    health: DbHealth,
 }
 
 impl DbHealthChecker for QueryTracker {
     fn get_env(&self) -> &Env {
         &self.env
+    }
+
+    fn is_healthy(&self) -> bool {
+        self.health.is_healthy()
     }
 
     fn count_entries(&self) -> Result<Vec<(&'static str, u64)>, Error> {
@@ -60,12 +62,21 @@ impl DbHealthChecker for QueryTracker {
 }
 
 impl LmdbStore for QueryTracker {
+    const LABEL: &'static str = "query";
     // 10 MiB hard ceiling. Same reasoning as FrecencyTracker (GH issue #437).
     const MAP_SIZE: usize = 10 * 1024 * 1024;
     const MAX_DBS: u32 = 16;
-    // Nuke at 4 MiB — query history is bounded per-project but query→file
+    // Nuke at 8 MiB — query history is bounded per-project but query->file
     // associations grow unbounded over typing time.
-    const SIZE_CAP_BYTES: u64 = 4 * 1024 * 1024;
+    const SIZE_CAP_BYTES: u64 = 8 * 1024 * 1024;
+
+    fn env(&self) -> &Env {
+        &self.env
+    }
+
+    fn health(&self) -> &DbHealth {
+        &self.health
+    }
 }
 
 impl QueryTracker {
@@ -76,7 +87,7 @@ impl QueryTracker {
 
     pub fn open(db_path: impl AsRef<Path>) -> Result<Self, Error> {
         let db_path = db_path.as_ref();
-        let env = Self::open_env(db_path)?;
+        let (env, health) = Self::open_env(db_path)?;
 
         let query_file_db = Self::open_database_safe(&env, Some("query_file_associations"))?;
         let query_history_db = Self::open_database_safe(&env, Some("query_history"))?;
@@ -87,6 +98,7 @@ impl QueryTracker {
             query_file_db,
             query_history_db,
             grep_query_history_db,
+            health,
         })
     }
 
@@ -168,7 +180,6 @@ impl QueryTracker {
             .map_err(Error::DbRead)?
             .unwrap_or_default();
 
-        // history is FIFO, last element is most recent
         if history.len() > offset {
             let index = history.len() - 1 - offset;
             let record = history.remove(index);
@@ -206,8 +217,6 @@ impl QueryTracker {
                 ?file_path,
                 "Query completed for same file as last time"
             );
-
-            // Same file - just increment count
             entry.open_count += 1;
         } else {
             tracing::debug!(
@@ -215,8 +224,6 @@ impl QueryTracker {
                 ?file_path,
                 "Query completed for different file than last time"
             );
-
-            // Different file - replace and reset count to 1
             entry.file_path = file_path_buf;
             entry.open_count = 1;
         }
@@ -225,6 +232,7 @@ impl QueryTracker {
 
         if let Err(e) = self.query_file_db.put(&mut wtxn, &query_key, &entry) {
             if is_map_full(&e) {
+                self.health.mark_unhealthy("MDB_MAP_FULL on put");
                 tracing::error!(
                     ?query,
                     "Query tracker DB hit MDB_MAP_FULL; dropping write — db will \
@@ -235,7 +243,6 @@ impl QueryTracker {
             return Err(Error::DbWrite(e));
         }
 
-        // Update query history database
         let project_key = Self::create_project_key(project_path)?;
         if let Err(e) =
             Self::append_to_history(&self.query_history_db, &mut wtxn, &project_key, query, now)
@@ -243,6 +250,7 @@ impl QueryTracker {
             if let Error::DbWrite(ref inner) = e
                 && is_map_full(inner)
             {
+                self.health.mark_unhealthy("MDB_MAP_FULL on history append");
                 tracing::error!(?query, "Query tracker DB map full while appending history");
                 return Ok(());
             }
@@ -251,6 +259,7 @@ impl QueryTracker {
 
         if let Err(e) = wtxn.commit() {
             if is_map_full(&e) {
+                self.health.mark_unhealthy("MDB_MAP_FULL on commit");
                 tracing::error!(?query, "Query tracker DB map full on commit");
                 return Ok(());
             }
@@ -295,14 +304,13 @@ impl QueryTracker {
             .map_err(Error::DbRead)?
         {
             Some(entry) => {
-                // Check if the file path matches and return boost
                 if entry.file_path == file_path && entry.open_count >= 2 {
                     Ok(combo_boost)
                 } else {
                     Ok(0)
                 }
             }
-            None => Ok(0), // Query not found
+            None => Ok(0),
         }
     }
 
@@ -318,7 +326,6 @@ impl QueryTracker {
     }
 
     /// Track a grep query in the grep-specific history.
-    /// Only records query history (no file association tracking needed for grep).
     pub fn track_grep_query(&mut self, query: &str, project_path: &Path) -> Result<(), Error> {
         let now = self.get_now();
         let project_key = Self::create_project_key(project_path)?;
@@ -334,6 +341,8 @@ impl QueryTracker {
             if let Error::DbWrite(ref inner) = e
                 && is_map_full(inner)
             {
+                self.health
+                    .mark_unhealthy("MDB_MAP_FULL on grep history append");
                 tracing::error!(?query, "Grep query history DB map full; dropping write");
                 return Ok(());
             }
@@ -342,6 +351,7 @@ impl QueryTracker {
 
         if let Err(e) = wtxn.commit() {
             if is_map_full(&e) {
+                self.health.mark_unhealthy("MDB_MAP_FULL on commit");
                 tracing::error!(?query, "Grep query history DB map full on commit");
                 return Ok(());
             }
@@ -379,7 +389,6 @@ mod tests {
         let project_path = PathBuf::from("/test/project");
         let file_path = PathBuf::from("/test/project/src/main.rs");
 
-        // First completion
         tracker
             .track_query_completion("main", &project_path, &file_path)
             .unwrap();
@@ -388,7 +397,6 @@ mod tests {
             .unwrap();
         assert_eq!(boost, 0, "First completion should not boost");
 
-        // Second completion - should boost now
         tracker
             .track_query_completion("main", &project_path, &file_path)
             .unwrap();
@@ -397,7 +405,6 @@ mod tests {
             .unwrap();
         assert_eq!(boost, 10000, "Second completion should boost");
 
-        // Different file for same query - should reset count and no boost
         let other_file = PathBuf::from("/test/project/src/lib.rs");
         tracker
             .track_query_completion("main", &project_path, &other_file)
@@ -407,7 +414,6 @@ mod tests {
             .unwrap();
         assert_eq!(boost, 0, "Different file should reset boost");
 
-        // Original file should no longer get boost (replaced by new file)
         let boost = tracker
             .get_last_query_path("main", &project_path, &file_path, 10000)
             .unwrap();
@@ -420,12 +426,10 @@ mod tests {
     fn test_hashing_functions() {
         let project_path = PathBuf::from("/test/project");
 
-        // Test project key hashing
         let key1 = QueryTracker::create_project_key(&project_path).unwrap();
         let key2 = QueryTracker::create_project_key(&project_path).unwrap();
         assert_eq!(key1, key2, "Same project should hash to same key");
 
-        // Test query key hashing
         let query_key1 = QueryTracker::create_query_key(&project_path, "test").unwrap();
         let query_key2 = QueryTracker::create_query_key(&project_path, "test").unwrap();
         assert_eq!(
@@ -433,14 +437,12 @@ mod tests {
             "Same project+query should hash to same key"
         );
 
-        // Different queries should hash differently
         let query_key3 = QueryTracker::create_query_key(&project_path, "different").unwrap();
         assert_ne!(
             query_key1, query_key3,
             "Different queries should hash to different keys"
         );
 
-        // Different projects should hash differently
         let other_project = PathBuf::from("/other/project");
         let query_key4 = QueryTracker::create_query_key(&other_project, "test").unwrap();
         assert_ne!(

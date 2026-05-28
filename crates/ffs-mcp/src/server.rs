@@ -17,7 +17,7 @@ use crate::engine_tools::{
 use crate::output::{GrepFormatter, OutputMode, file_suffix};
 use ffs::PaginationArgs;
 use ffs::grep::{GrepMode, GrepSearchOptions, has_regex_metacharacters};
-use ffs::types::FileItem;
+use ffs::types::{FileItem, MixedItemRef};
 use ffs::{FuzzySearchOptions, QueryParser, SharedFilePicker, SharedFrecency};
 use ffs_query_parser::AiGrepConfig;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -100,6 +100,30 @@ pub struct FindFilesParams {
     // this has to be float because llms are stupid
     pub max_results: Option<f64>,
     /// Cursor from previous result. Only use if previous results weren't sufficient.
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct FindDirsParams {
+    /// Fuzzy search query for directory names.
+    #[serde(alias = "pattern")]
+    pub query: String,
+    /// Max results (default 20).
+    #[serde(rename = "maxResults")]
+    pub max_results: Option<f64>,
+    /// Cursor from previous result.
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct FindMixedParams {
+    /// Fuzzy search query for files AND directories.
+    #[serde(alias = "pattern")]
+    pub query: String,
+    /// Max results (default 20).
+    #[serde(rename = "maxResults")]
+    pub max_results: Option<f64>,
+    /// Cursor from previous result.
     pub cursor: Option<String>,
 }
 
@@ -529,6 +553,172 @@ impl FfsServer {
         let mut result = CallToolResult::success(vec![Content::text(lines.join("\n"))]);
         self.maybe_append_update_notice(&mut result);
         Ok(result)
+    }
+
+    /// Fuzzy directory search by name. Searches DIRECTORY names, not file contents.
+    #[tool(
+        name = "ffs_find_dirs",
+        description = "Fuzzy directory search by name. Searches DIRECTORY names only. Use ffs_find for files, ffs_find_mixed for both. Supports fuzzy matching and path prefixes ('src/'). Returns directories ranked by match quality and frecency."
+    )]
+    fn ffs_find_dirs(
+        &self,
+        Parameters(params): Parameters<FindDirsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let max_results = normalize_max_results(params.max_results, 20);
+
+        let page_offset = params
+            .cursor
+            .as_deref()
+            .and_then(|id| self.cursor_store.lock().ok()?.get(id))
+            .unwrap_or(0);
+
+        let guard = self.picker.read().map_err(|e| {
+            ErrorData::internal_error(format!("Failed to acquire picker lock: {e}"), None)
+        })?;
+        let picker = guard
+            .as_ref()
+            .ok_or_else(|| ErrorData::internal_error("File picker not initialized", None))?;
+        let base_path = picker.base_path();
+
+        let parser = QueryParser::default();
+        let ffs_query = parser.parse(&params.query);
+        let opts = FuzzySearchOptions {
+            max_threads: 0,
+            current_file: None,
+            project_path: Some(base_path),
+            combo_boost_score_multiplier: 0,
+            min_combo_count: 0,
+            pagination: PaginationArgs {
+                offset: page_offset,
+                limit: max_results,
+            },
+        };
+
+        let result = picker.fuzzy_search_directories(&ffs_query, opts);
+        let total_dirs = result.total_dirs;
+
+        if result.items.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "0 directory results ({} indexed dirs)",
+                total_dirs
+            ))]));
+        }
+
+        let mut lines: Vec<String> = Vec::new();
+        let next_offset = page_offset + result.items.len();
+        let has_more = next_offset < result.total_matched;
+
+        if has_more {
+            lines.push(format!(
+                "{}/{} matches",
+                result.items.len(),
+                result.total_matched
+            ));
+        }
+
+        for dir in &result.items {
+            let path = dir.relative_path(picker);
+            let trimmed = path.trim_end_matches('/');
+            lines.push(format!("{}/", trimmed));
+        }
+
+        if has_more {
+            let mut cs = self.lock_cursors()?;
+            let cursor_id = cs.store(next_offset);
+            lines.push(format!("cursor: {}", cursor_id));
+        }
+
+        let mut out = CallToolResult::success(vec![Content::text(lines.join("\n"))]);
+        self.maybe_append_update_notice(&mut out);
+        Ok(out)
+    }
+
+    /// Fuzzy search across both files and directories, merged by score.
+    #[tool(
+        name = "ffs_find_mixed",
+        description = "Fuzzy search across both files AND directories, merged and ranked by score. Use ffs_find for files only, ffs_find_dirs for directories only. Trailing '/' in query restricts to directories."
+    )]
+    fn ffs_find_mixed(
+        &self,
+        Parameters(params): Parameters<FindMixedParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let max_results = normalize_max_results(params.max_results, 20);
+
+        let page_offset = params
+            .cursor
+            .as_deref()
+            .and_then(|id| self.cursor_store.lock().ok()?.get(id))
+            .unwrap_or(0);
+
+        let guard = self.picker.read().map_err(|e| {
+            ErrorData::internal_error(format!("Failed to acquire picker lock: {e}"), None)
+        })?;
+        let picker = guard
+            .as_ref()
+            .ok_or_else(|| ErrorData::internal_error("File picker not initialized", None))?;
+        let base_path = picker.base_path();
+
+        let parser = QueryParser::default();
+        let ffs_query = parser.parse(&params.query);
+        let opts = FuzzySearchOptions {
+            max_threads: 0,
+            current_file: None,
+            project_path: Some(base_path),
+            combo_boost_score_multiplier: 100,
+            min_combo_count: 3,
+            pagination: PaginationArgs {
+                offset: page_offset,
+                limit: max_results,
+            },
+        };
+
+        let result = picker.fuzzy_search_mixed(&ffs_query, None, opts);
+
+        if result.items.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "0 results ({} files, {} dirs)",
+                result.total_files, result.total_dirs
+            ))]));
+        }
+
+        let mut lines: Vec<String> = Vec::new();
+        let next_offset = page_offset + result.items.len();
+        let has_more = next_offset < result.total_matched;
+
+        if has_more {
+            lines.push(format!(
+                "{}/{} matches",
+                result.items.len(),
+                result.total_matched
+            ));
+        }
+
+        for item in &result.items {
+            match item {
+                MixedItemRef::File(f) => {
+                    lines.push(format!(
+                        "{}{}",
+                        f.relative_path(picker),
+                        file_suffix(f.git_status, f.total_frecency_score())
+                    ));
+                }
+                MixedItemRef::Dir(d) => {
+                    let path = d.relative_path(picker);
+                    let trimmed = path.trim_end_matches('/');
+                    lines.push(format!("{}/", trimmed));
+                }
+            }
+        }
+
+        if has_more {
+            let mut cs = self.lock_cursors()?;
+            let cursor_id = cs.store(next_offset);
+            lines.push(format!("cursor: {}", cursor_id));
+        }
+
+        let mut out = CallToolResult::success(vec![Content::text(lines.join("\n"))]);
+        self.maybe_append_update_notice(&mut out);
+        Ok(out)
     }
 
     /// Search file contents for text patterns. This is the DEFAULT search tool.

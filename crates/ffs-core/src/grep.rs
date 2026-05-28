@@ -11,7 +11,7 @@ use crate::{
     constraints::apply_constraints,
     extract_bigrams,
     sort_buffer::sort_with_buffer,
-    types::{ContentCacheBudget, FileItem},
+    types::{ContentCacheBudget, FileItem, FileSliceExt},
 };
 use aho_corasick::AhoCorasick;
 pub use ffs_grep::{
@@ -960,7 +960,7 @@ pub(crate) fn multi_grep_search<'a>(
     arena: crate::simd_path::ArenaPtr,
     overflow_arena: crate::simd_path::ArenaPtr,
 ) -> GrepResult<'a> {
-    let total_files = files.len();
+    let total_files = files.live_count();
 
     if patterns.is_empty() || patterns.iter().all(|p| p.is_empty()) {
         return GrepResult {
@@ -1859,7 +1859,7 @@ pub(crate) fn grep_search<'a>(
     arena: crate::simd_path::ArenaPtr,
     overflow_arena: crate::simd_path::ArenaPtr,
 ) -> GrepResult<'a> {
-    let total_files = files.len();
+    let total_files = files.live_count();
 
     // Extract the grep text and file constraints from the parsed query.
     // For grep, the search pattern is the original query with constraint tokens
@@ -2155,9 +2155,15 @@ pub(crate) fn grep_search<'a>(
                         return true;
                     }
 
-                    // we use ptr offsets to avoid additional allocations and keep the index
                     let file_idx =
                         unsafe { (*f as *const FileItem).offset_from(base_ptr) as usize };
+
+                    // Files past the bigram boundary (unindexable base files)
+                    // are not tracked by the bigram filter — always search them.
+                    if file_idx >= overflow_start {
+                        return true;
+                    }
+
                     BigramFilter::is_candidate(candidates, file_idx)
                 });
             }

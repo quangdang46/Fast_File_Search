@@ -273,6 +273,7 @@ pub unsafe extern "C" fn ffs_create_instance2(
             watch,
             mode,
             cache_budget,
+            follow_symlinks: false,
         },
     ) {
         return FfsResult::err(&format!("Failed to init file picker: {}", e));
@@ -930,6 +931,7 @@ pub unsafe extern "C" fn ffs_restart_index(
             watch,
             mode,
             cache_budget: None,
+            follow_symlinks: false,
         },
     ) {
         Ok(()) => FfsResult::ok_empty(),

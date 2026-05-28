@@ -169,8 +169,10 @@ impl ParserConfig for GrepConfig {
         // Require a comma between `{` and `}` AND at least one letter to
         // distinguish real glob expansions like `{src,lib}` or `*.{ts,tsx}`
         // from code patterns like `format!("{}")` and regex quantifiers `{2,3}`.
+        // Guard `open < close` so reversed braces like `}{` don't panic on slicing.
         if let Some(open) = bytes.iter().position(|&b| b == b'{')
             && let Some(close) = bytes.iter().rposition(|&b| b == b'}')
+            && open < close
         {
             let inner = &bytes[open + 1..close];
             if inner.contains(&b',') && inner.iter().any(|b| b.is_ascii_alphabetic()) {

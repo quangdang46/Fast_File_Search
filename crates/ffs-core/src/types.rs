@@ -38,6 +38,19 @@ impl FfsStringStorage for ArenaPtr {
     }
 }
 
+/// Helper methods on `[FileItem]` slices.
+pub trait FileSliceExt {
+    /// Count non-deleted files in this slice.
+    fn live_count(&self) -> usize;
+}
+
+impl FileSliceExt for [FileItem] {
+    #[inline]
+    fn live_count(&self) -> usize {
+        self.iter().filter(|f| !f.is_deleted()).count()
+    }
+}
+
 /// Cached file contents — mmap on Unix, heap buffer on Windows.
 ///
 /// On Windows, memory-mapped files hold the file handle open and prevent

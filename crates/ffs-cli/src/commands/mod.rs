@@ -92,3 +92,35 @@ pub(crate) fn walk_files(root: &Path) -> Vec<std::path::PathBuf> {
     });
     out.into_inner().unwrap_or_default()
 }
+
+/// Walk all directories under `root` honoring `.gitignore`.
+pub(crate) fn walk_dirs(root: &Path) -> Vec<std::path::PathBuf> {
+    use ignore::WalkState;
+    use std::sync::Mutex;
+
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2)
+        .min(8);
+
+    let out: Mutex<Vec<std::path::PathBuf>> = Mutex::new(Vec::with_capacity(256));
+    let walker = ignore::WalkBuilder::new(root)
+        .standard_filters(true)
+        .follow_links(false)
+        .threads(threads)
+        .build_parallel();
+    walker.run(|| {
+        let out = &out;
+        Box::new(move |entry| {
+            if let Ok(e) = entry {
+                if e.file_type().is_some_and(|t| t.is_dir()) {
+                    if let Ok(mut guard) = out.lock() {
+                        guard.push(e.into_path());
+                    }
+                }
+            }
+            WalkState::Continue
+        })
+    });
+    out.into_inner().unwrap_or_default()
+}

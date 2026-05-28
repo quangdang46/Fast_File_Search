@@ -1169,6 +1169,82 @@ mod tests {
     }
 
     #[test]
+    fn test_grep_reversed_braces_does_not_panic() {
+        // Reversed-brace tokens like `}{` must not cause slice-out-of-bounds panics
+        // in GrepConfig::is_glob_pattern.
+        for query in [
+            "}{",
+            "}{ foo",
+            "foo }{",
+            "a}{b",
+            "}}{{",
+            "} something {{{ {}}}d{ {}}}}{{{    }}}}}d{d    something {{}}}}}}",
+        ] {
+            let result = QueryParser::new(GrepConfig).parse(query);
+            // A reversed-brace token must not be promoted to a Glob
+            assert!(
+                !result
+                    .constraints
+                    .iter()
+                    .any(|c| matches!(c, Constraint::Glob(_))),
+                "GrepConfig: {query:?} produced a Glob constraint, got {:?}",
+                result.constraints
+            );
+
+            let result = QueryParser::new(crate::AiGrepConfig).parse(query);
+            assert!(
+                !result
+                    .constraints
+                    .iter()
+                    .any(|c| matches!(c, Constraint::Glob(_))),
+                "AiGrepConfig: {query:?} produced a Glob constraint, got {:?}",
+                result.constraints
+            );
+        }
+    }
+
+    #[test]
+    fn test_grep_valid_brace_expansion_amid_junk_braces() {
+        // Mixing junk-brace tokens with a real brace-expansion glob must not panic
+        // and must still surface the valid glob.
+        let parser = QueryParser::new(GrepConfig);
+        let result = parser.parse("}{ {{}} }}{{ {} {src,lib} pattern");
+
+        let glob_constraints: Vec<&str> = result
+            .constraints
+            .iter()
+            .filter_map(|c| match c {
+                Constraint::Glob(p) => Some(*p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            glob_constraints,
+            vec!["{src,lib}"],
+            "Expected exactly one Glob({{src,lib}}), got {:?}",
+            result.constraints
+        );
+
+        // Same for AiGrepConfig
+        let parser = QueryParser::new(crate::AiGrepConfig);
+        let result = parser.parse("}{ {{}} }}{{ {} {src,lib} pattern");
+        let glob_constraints: Vec<&str> = result
+            .constraints
+            .iter()
+            .filter_map(|c| match c {
+                Constraint::Glob(p) => Some(*p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            glob_constraints,
+            vec!["{src,lib}"],
+            "AiGrepConfig: expected Glob({{src,lib}}), got {:?}",
+            result.constraints
+        );
+    }
+
+    #[test]
     fn test_grep_braces_without_comma_is_text() {
         let parser = QueryParser::new(GrepConfig);
         // Code patterns like format!("{}") should NOT be treated as brace expansion
